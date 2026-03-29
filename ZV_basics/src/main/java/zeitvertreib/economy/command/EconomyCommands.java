@@ -41,6 +41,7 @@ public final class EconomyCommands {
 
 	public void register(CommandDispatcher<CommandSourceStack> dispatcher, CommandBuildContext registryAccess, Commands.CommandSelection environment) {
 		dispatcher.register(Commands.literal("zv")
+			.executes(this::showHelp)
 			.then(Commands.literal("trade")
 				.then(Commands.argument("player", EntityArgument.player())
 					.then(Commands.argument("price", IntegerArgumentType.integer(1))
@@ -329,9 +330,12 @@ public final class EconomyCommands {
 		context.getSource().sendSuccess(() -> Component.literal("/zv team deny <team> - Deny a pending invite."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zv team kick <player> - Leader: remove a member."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zv team transfer <player> - Leader: transfer leadership."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/zv team levelup - Leader: spend team bank funds to unlock another member slot."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zv team bank deposit <amt> - Deposit to team bank."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zv team bank withdraw <amt> - Withdraw from team bank."), false);
-		context.getSource().sendSuccess(() -> Component.literal("/zv team info - View team details (leader, members, bank)."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/zv team info - View team details (leader, level, slots, bank)."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/teams - List all teams."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/teams ranked - Rank teams"), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zv team leave - Leave your current team."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zv help - Show this help message."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zvdev help - OP-only developer and debugging commands."), false);

@@ -1,6 +1,7 @@
 package zeitvertreib.economy.command;
 
 import com.mojang.brigadier.Command;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
@@ -17,6 +18,9 @@ import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.server.level.ServerPlayer;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 
@@ -38,37 +42,55 @@ public final class TeamCommands {
 
 	public void register(CommandDispatcher<CommandSourceStack> dispatcher, CommandBuildContext registryAccess, Commands.CommandSelection environment) {
 		dispatcher.register(Commands.literal("zv")
-			.then(Commands.literal("team")
-				.then(Commands.literal("create")
-					.then(Commands.argument("name", StringArgumentType.word())
-						.then(Commands.argument("color", StringArgumentType.word())
-							.executes(this::createTeam))))
-				.then(Commands.literal("info")
-					.executes(this::teamInfo))
-				.then(Commands.literal("leave")
-					.executes(this::leaveTeam))
-				.then(Commands.literal("invite")
-					.then(Commands.argument("player", EntityArgument.player())
-						.executes(this::invitePlayer)))
-				.then(Commands.literal("accept")
-					.then(Commands.argument("team", StringArgumentType.word())
-						.executes(this::acceptInvite)))
-				.then(Commands.literal("deny")
-					.then(Commands.argument("team", StringArgumentType.word())
-						.executes(this::denyInvite)))
-				.then(Commands.literal("kick")
-					.then(Commands.argument("player", EntityArgument.player())
-						.executes(this::kickPlayer)))
-				.then(Commands.literal("transfer")
-					.then(Commands.argument("player", EntityArgument.player())
-						.executes(this::transferLeadership)))
-				.then(Commands.literal("bank")
-					.then(Commands.literal("deposit")
-						.then(Commands.argument("amount", IntegerArgumentType.integer(1))
-							.executes(this::depositToBank)))
-					.then(Commands.literal("withdraw")
-						.then(Commands.argument("amount", IntegerArgumentType.integer(1))
-							.executes(this::withdrawFromBank))))));
+			.then(buildTeamCommandRoot()));
+		dispatcher.register(buildTeamsCommandRoot());
+	}
+
+	private LiteralArgumentBuilder<CommandSourceStack> buildTeamCommandRoot() {
+		return Commands.literal("team")
+			.then(Commands.literal("create")
+				.then(Commands.argument("name", StringArgumentType.word())
+					.then(Commands.argument("color", StringArgumentType.word())
+						.executes(this::createTeam))))
+			.then(Commands.literal("info")
+				.executes(this::teamInfo))
+			.then(Commands.literal("leave")
+				.executes(this::leaveTeam))
+			.then(Commands.literal("invite")
+				.then(Commands.argument("player", EntityArgument.player())
+					.executes(this::invitePlayer)))
+			.then(Commands.literal("accept")
+				.then(Commands.argument("team", StringArgumentType.word())
+					.executes(this::acceptInvite)))
+			.then(Commands.literal("deny")
+				.then(Commands.argument("team", StringArgumentType.word())
+					.executes(this::denyInvite)))
+			.then(Commands.literal("kick")
+				.then(Commands.argument("player", EntityArgument.player())
+					.executes(this::kickPlayer)))
+			.then(Commands.literal("transfer")
+				.then(Commands.argument("player", EntityArgument.player())
+					.executes(this::transferLeadership)))
+			.then(Commands.literal("bank")
+				.then(Commands.literal("deposit")
+					.then(Commands.argument("amount", IntegerArgumentType.integer(1))
+						.executes(this::depositToBank)))
+				.then(Commands.literal("withdraw")
+					.then(Commands.argument("amount", IntegerArgumentType.integer(1))
+						.executes(this::withdrawFromBank))))
+			.then(Commands.literal("levelup")
+				.executes(this::levelUpTeam))
+			.then(Commands.literal("list")
+				.executes(this::showTeamsList))
+			.then(Commands.literal("ranked")
+				.executes(this::showRankedTeams));
+	}
+
+	private LiteralArgumentBuilder<CommandSourceStack> buildTeamsCommandRoot() {
+		return Commands.literal("teams")
+			.executes(this::showTeamsList)
+			.then(Commands.literal("ranked")
+				.executes(this::showRankedTeams));
 	}
 
 	private int createTeam(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
@@ -99,7 +121,7 @@ public final class TeamCommands {
 		TeamData team = teamManager.createTeam(context.getSource().getServer(), player, normalizedName, color);
 		MutableComponent message = Component.literal("Created team ")
 			.append(teamManager.describeTeam(team))
-			.append(Component.literal(". You are now the team leader."));
+			.append(Component.literal(". You are now the team leader. Level: " + team.level() + ". Member slots: " + team.maxMembers() + "."));
 		context.getSource().sendSuccess(() -> message, false);
 		return Command.SINGLE_SUCCESS;
 	}
@@ -127,6 +149,11 @@ public final class TeamCommands {
 			return 0;
 		}
 
+		if (teamManager.getAvailableInviteSlots(context.getSource().getServer(), team) <= 0) {
+			context.getSource().sendFailure(Component.literal("Your team has no free member slots. Upgrade it with /zv team levelup first."));
+			return 0;
+		}
+
 		teamManager.invitePlayer(context.getSource().getServer(), team, leader, target);
 		context.getSource().sendSuccess(() -> Component.literal("Sent a team invite to " + target.getName().getString() + "."), false);
 		target.sendSystemMessage(buildInviteMessage(team, leader.getName().getString()));
@@ -144,6 +171,17 @@ public final class TeamCommands {
 		TeamInvite invite = teamManager.getInvite(context.getSource().getServer(), player.getUUID());
 		if (invite == null || !invite.teamName().equals(teamName)) {
 			context.getSource().sendFailure(Component.literal("You do not have a pending invite for that team."));
+			return 0;
+		}
+
+		TeamData invitedTeam = teamManager.getTeam(context.getSource().getServer(), teamName);
+		if (invitedTeam == null) {
+			context.getSource().sendFailure(Component.literal("That team no longer exists."));
+			return 0;
+		}
+
+		if (!teamManager.canAcceptNewMember(context.getSource().getServer(), invitedTeam)) {
+			context.getSource().sendFailure(Component.literal("That team is full right now. Ask the leader to use /zv team levelup."));
 			return 0;
 		}
 
@@ -254,6 +292,35 @@ public final class TeamCommands {
 		return Command.SINGLE_SUCCESS;
 	}
 
+	private int levelUpTeam(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+		ServerPlayer leader = context.getSource().getPlayerOrException();
+		TeamData team = requireLeaderTeam(context, leader);
+		if (team == null) {
+			return 0;
+		}
+
+		int targetLevel = team.level() + 1;
+		int upgradeCost = teamManager.getLevelUpCost(team);
+		if (!teamManager.levelUpTeam(context.getSource().getServer(), team)) {
+			context.getSource().sendFailure(Component.literal("Your team bank needs ")
+				.append(formatCurrency(upgradeCost))
+				.append(Component.literal(" to reach level " + targetLevel + ".")));
+			return 0;
+		}
+
+		MutableComponent response = Component.literal("Upgraded ")
+			.append(teamManager.describeTeam(team))
+			.append(Component.literal(" to level " + team.level() + ". Member slots: "))
+			.append(Component.literal(String.valueOf(team.maxMembers())).withStyle(ChatFormatting.AQUA))
+			.append(Component.literal(". Bank remaining: "))
+			.append(formatCurrency(team.bankBalance()))
+			.append(Component.literal(". Next upgrade cost: "))
+			.append(formatCurrency(teamManager.getLevelUpCost(team)))
+			.append(Component.literal("."));
+		context.getSource().sendSuccess(() -> response, false);
+		return Command.SINGLE_SUCCESS;
+	}
+
 	private int withdrawFromBank(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
 		ServerPlayer player = context.getSource().getPlayerOrException();
 		TeamData team = requirePlayerTeam(context, player);
@@ -308,13 +375,63 @@ public final class TeamCommands {
 
 		MutableComponent message = Component.literal("Team: ")
 			.append(teamManager.describeTeam(team))
+			.append(Component.literal("\nLevel: " + team.level()))
 			.append(Component.literal("\nLeader: " + leaderName))
-			.append(Component.literal("\nMembers: "))
+			.append(Component.literal("\nMembers: " + team.memberIds().size() + "/" + team.maxMembers() + " "))
 			.append(members)
 			.append(Component.literal("\nBank: "))
-			.append(formatCurrency(team.bankBalance()));
+			.append(formatCurrency(team.bankBalance()))
+			.append(Component.literal("\nNext upgrade cost: "))
+			.append(formatCurrency(teamManager.getLevelUpCost(team)));
 
 		context.getSource().sendSuccess(() -> message, false);
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private int showTeamsList(CommandContext<CommandSourceStack> context) {
+		List<TeamData> teams = new ArrayList<>(teamManager.getTeams(context.getSource().getServer()));
+		teams.sort(Comparator.comparing(TeamData::name));
+		if (teams.isEmpty()) {
+			context.getSource().sendSuccess(() -> Component.literal("No teams exist."), false);
+			return Command.SINGLE_SUCCESS;
+		}
+
+		context.getSource().sendSuccess(() -> Component.literal("--- Teams ---").withStyle(ChatFormatting.YELLOW), false);
+		for (TeamData team : teams) {
+			String line = String.format(Locale.ROOT, "%s lvl=%d members=%d/%d bank=%d %s",
+				team.name(),
+				team.level(),
+				team.memberIds().size(),
+				team.maxMembers(),
+				team.bankBalance(),
+				CURRENCY_LABEL);
+			context.getSource().sendSuccess(() -> Component.literal(line).withStyle(team.color()), false);
+		}
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private int showRankedTeams(CommandContext<CommandSourceStack> context) {
+		List<TeamManager.TeamRankingEntry> rankings = teamManager.getRankedTeams(context.getSource().getServer());
+		if (rankings.isEmpty()) {
+			context.getSource().sendSuccess(() -> Component.literal("No teams exist."), false);
+			return Command.SINGLE_SUCCESS;
+		}
+
+		context.getSource().sendSuccess(() -> Component.literal("--- Team Rankings ---").withStyle(ChatFormatting.YELLOW), false);
+		for (int index = 0; index < rankings.size(); index++) {
+			TeamManager.TeamRankingEntry ranking = rankings.get(index);
+			TeamData team = ranking.team();
+			String line = String.format(Locale.ROOT, "%d. %s lvl=%d members=%d/%d bank=%d %s score=%.1f%%",
+				index + 1,
+				team.name(),
+				team.level(),
+				team.memberIds().size(),
+				team.maxMembers(),
+				team.bankBalance(),
+				CURRENCY_LABEL,
+				ranking.score() * 100.0D);
+			context.getSource().sendSuccess(() -> Component.literal(line).withStyle(team.color()), false);
+		}
 		return Command.SINGLE_SUCCESS;
 	}
 

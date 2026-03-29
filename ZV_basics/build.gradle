@@ -19,12 +19,9 @@ repositories {
 }
 
 loom {
-	splitEnvironmentSourceSets()
-
 	mods {
 		"zeitvertreib-economy" {
 			sourceSet sourceSets.main
-			sourceSet sourceSets.client
 		}
 	}
 

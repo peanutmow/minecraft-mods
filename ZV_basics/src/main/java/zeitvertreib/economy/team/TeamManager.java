@@ -17,6 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -29,6 +30,7 @@ public final class TeamManager {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 	private static final String DISPLAY_TEAM_PREFIX = "zvct_";
 	public static final long INVITE_TIMEOUT_MILLIS = 60_000L;
+	public static final int BASE_LEVEL_UP_COST = 100;
 
 	private final Map<String, TeamData> teamsByName = new HashMap<>();
 	private final Map<UUID, String> playerTeams = new HashMap<>();
@@ -63,8 +65,58 @@ public final class TeamManager {
 		return List.copyOf(teamsByName.values());
 	}
 
+	public List<TeamRankingEntry> getRankedTeams(MinecraftServer server) {
+		ensureLoaded(server);
+		List<TeamData> teams = new ArrayList<>(teamsByName.values());
+		int maxBank = teams.stream().mapToInt(TeamData::bankBalance).max().orElse(0);
+		int maxLevel = teams.stream().mapToInt(TeamData::level).max().orElse(1);
+		teams.sort(
+			Comparator.comparingDouble((TeamData team) -> calculateRankingScore(team, maxBank, maxLevel)).reversed()
+				.thenComparing(Comparator.comparingInt(TeamData::level).reversed())
+				.thenComparing(Comparator.comparingInt(TeamData::bankBalance).reversed())
+				.thenComparing(TeamData::name)
+		);
+
+		List<TeamRankingEntry> rankedTeams = new ArrayList<>(teams.size());
+		for (TeamData team : teams) {
+			double bankRatio = calculateBankRatio(team, maxBank);
+			double levelRatio = calculateLevelRatio(team, maxLevel);
+			rankedTeams.add(new TeamRankingEntry(team, calculateRankingScore(team, maxBank, maxLevel), bankRatio, levelRatio));
+		}
+		return rankedTeams;
+	}
+
 	public boolean isLeader(TeamData team, UUID playerId) {
 		return team != null && playerId.equals(team.leaderId());
+	}
+
+	public int getLevelUpCost(TeamData team) {
+		if (team == null) {
+			return BASE_LEVEL_UP_COST;
+		}
+
+		long cost = (long) BASE_LEVEL_UP_COST << Math.max(0, team.level() - 1);
+		return (int) Math.min(Integer.MAX_VALUE, cost);
+	}
+
+	public int getAvailableMemberSlots(MinecraftServer server, TeamData team) {
+		ensureLoaded(server);
+		if (team == null) {
+			return 0;
+		}
+		return Math.max(0, team.maxMembers() - team.memberIds().size());
+	}
+
+	public int getAvailableInviteSlots(MinecraftServer server, TeamData team) {
+		ensureLoaded(server);
+		if (team == null) {
+			return 0;
+		}
+		return Math.max(0, team.maxMembers() - team.memberIds().size() - countPendingInvites(team.name()));
+	}
+
+	public boolean canAcceptNewMember(MinecraftServer server, TeamData team) {
+		return getAvailableMemberSlots(server, team) > 0;
 	}
 
 	public TeamData createTeam(MinecraftServer server, ServerPlayer leader, String teamName, ChatFormatting color) {
@@ -107,6 +159,9 @@ public final class TeamManager {
 		TeamData team = teamsByName.get(normalizedTeamName);
 		if (team == null || playerTeams.containsKey(player.getUUID())) {
 			pendingInvites.remove(player.getUUID());
+			return null;
+		}
+		if (!canAcceptNewMember(server, team)) {
 			return null;
 		}
 
@@ -181,6 +236,9 @@ public final class TeamManager {
 		if (currentTeam != null) {
 			removePlayerFromTeam(server, player.getUUID());
 		}
+		if (!canAcceptNewMember(server, team)) {
+			return null;
+		}
 
 		team.addMember(player.getUUID());
 		playerTeams.put(player.getUUID(), team.name());
@@ -223,6 +281,19 @@ public final class TeamManager {
 		team.setBankBalance(amount);
 		save(server);
 		return team.bankBalance();
+	}
+
+	public boolean levelUpTeam(MinecraftServer server, TeamData team) {
+		ensureLoaded(server);
+		int cost = getLevelUpCost(team);
+		if (!team.canWithdrawFromBank(cost)) {
+			return false;
+		}
+
+		team.withdrawFromBank(cost);
+		team.levelUp();
+		save(server);
+		return true;
 	}
 
 	public void goOfflineAndRemoveFromTeam(MinecraftServer server, UUID playerId) {
@@ -367,7 +438,8 @@ public final class TeamManager {
 						color.getName(),
 						savedTeam.leaderId,
 						savedTeam.members,
-						savedTeam.bankBalance
+						savedTeam.bankBalance,
+						Math.max(1, savedTeam.level)
 					);
 
 					teamsByName.put(team.name(), team);
@@ -391,6 +463,7 @@ public final class TeamManager {
 			savedTeam.colorName = team.colorName();
 			savedTeam.leaderId = team.leaderId();
 			savedTeam.bankBalance = team.bankBalance();
+			savedTeam.level = team.level();
 			savedTeam.members = new ArrayList<>(team.memberIds());
 			savedData.teams.add(savedTeam);
 		}
@@ -427,6 +500,45 @@ public final class TeamManager {
 		return DISPLAY_TEAM_PREFIX + compactUuid.substring(0, 10);
 	}
 
+	private int countPendingInvites(String teamName) {
+		long now = System.currentTimeMillis();
+		List<UUID> expiredInvites = new ArrayList<>();
+		int pendingCount = 0;
+		for (Map.Entry<UUID, TeamInvite> entry : pendingInvites.entrySet()) {
+			TeamInvite invite = entry.getValue();
+			if (invite.expiresAtMillis() <= now) {
+				expiredInvites.add(entry.getKey());
+				continue;
+			}
+			if (invite.teamName().equals(teamName)) {
+				pendingCount++;
+			}
+		}
+
+		for (UUID playerId : expiredInvites) {
+			pendingInvites.remove(playerId);
+		}
+		return pendingCount;
+	}
+
+	private double calculateBankRatio(TeamData team, int maxBank) {
+		if (maxBank <= 0) {
+			return 1.0D;
+		}
+		return (double) team.bankBalance() / (double) maxBank;
+	}
+
+	private double calculateLevelRatio(TeamData team, int maxLevel) {
+		if (maxLevel <= 1) {
+			return 1.0D;
+		}
+		return (double) (team.level() - 1) / (double) (maxLevel - 1);
+	}
+
+	private double calculateRankingScore(TeamData team, int maxBank, int maxLevel) {
+		return (calculateBankRatio(team, maxBank) * 0.5D) + (calculateLevelRatio(team, maxLevel) * 0.5D);
+	}
+
 	private MutableComponent buildPlayerPrefix(TeamData team, boolean leader) {
 		if (leader) {
 			return Component.empty()
@@ -446,7 +558,11 @@ public final class TeamManager {
 		private String name;
 		private String colorName;
 		private UUID leaderId;
+		private int level = 1;
 		private int bankBalance;
 		private List<UUID> members = new ArrayList<>();
+	}
+
+	public record TeamRankingEntry(TeamData team, double score, double bankRatio, double levelRatio) {
 	}
 }

@@ -288,10 +288,12 @@ public final class DevCommands {
 
 		context.getSource().sendSuccess(() -> Component.literal("--- Teams ---").withStyle(ChatFormatting.YELLOW), false);
 		for (TeamData team : teams) {
-			String line = String.format(Locale.ROOT, "%s leader=%s members=%d bank=%d %s",
+			String line = String.format(Locale.ROOT, "%s leader=%s lvl=%d members=%d/%d bank=%d %s",
 				team.name(),
 				team.leaderId(),
+				team.level(),
 				team.memberIds().size(),
+				team.maxMembers(),
 				team.bankBalance(),
 				CURRENCY_LABEL);
 			context.getSource().sendSuccess(() -> Component.literal(line).withStyle(team.color()), false);
@@ -308,7 +310,9 @@ public final class DevCommands {
 		MinecraftServer server = context.getSource().getServer();
 		MutableComponent message = Component.literal("Team: ")
 			.append(teamManager.describeTeam(team))
+			.append(Component.literal("\nLevel: " + team.level()))
 			.append(Component.literal("\nLeader: " + resolvePlayerName(server, team.leaderId())))
+			.append(Component.literal("\nCapacity: " + team.memberIds().size() + "/" + team.maxMembers()))
 			.append(Component.literal("\nBank: "))
 			.append(formatCurrency(team.bankBalance()))
 			.append(Component.literal("\nMembers: "));
@@ -362,7 +366,10 @@ public final class DevCommands {
 		}
 
 		ServerPlayer player = EntityArgument.getPlayer(context, "player");
-		teamManager.forceJoinTeam(context.getSource().getServer(), team, player);
+		if (teamManager.forceJoinTeam(context.getSource().getServer(), team, player) == null) {
+			context.getSource().sendFailure(Component.literal("That team is already at full capacity."));
+			return 0;
+		}
 		context.getSource().sendSuccess(() -> Component.literal("[DEV] Moved ").withStyle(ChatFormatting.YELLOW)
 			.append(Component.literal(player.getName().getString()).withStyle(ChatFormatting.AQUA))
 			.append(Component.literal(" into "))

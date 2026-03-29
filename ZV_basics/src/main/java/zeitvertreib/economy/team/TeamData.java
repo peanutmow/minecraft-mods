@@ -9,17 +9,24 @@ import java.util.Set;
 import java.util.UUID;
 
 public final class TeamData {
+	private static final int BASE_MEMBER_CAPACITY = 2;
+
 	private final String name;
 	private final String colorName;
 	private UUID leaderId;
 	private final Set<UUID> memberIds;
 	private int bankBalance;
+	private int level;
 
 	public TeamData(String name, String colorName, UUID leaderId) {
-		this(name, colorName, leaderId, java.util.List.of(leaderId), 0);
+		this(name, colorName, leaderId, java.util.List.of(leaderId), 0, 1);
 	}
 
 	public TeamData(String name, String colorName, UUID leaderId, Collection<UUID> memberIds, int bankBalance) {
+		this(name, colorName, leaderId, memberIds, bankBalance, 1);
+	}
+
+	public TeamData(String name, String colorName, UUID leaderId, Collection<UUID> memberIds, int bankBalance, int level) {
 		this.name = name;
 		this.colorName = colorName;
 		this.leaderId = leaderId;
@@ -35,6 +42,7 @@ public final class TeamData {
 			this.memberIds.add(leaderId);
 		}
 		this.bankBalance = Math.max(0, bankBalance);
+		this.level = Math.max(1, level);
 	}
 
 	public String name() {
@@ -73,6 +81,22 @@ public final class TeamData {
 	public void transferLeadership(UUID playerId) {
 		leaderId = playerId;
 		memberIds.add(playerId);
+	}
+
+	public int level() {
+		return level;
+	}
+
+	public void setLevel(int level) {
+		this.level = Math.max(1, level);
+	}
+
+	public void levelUp() {
+		level++;
+	}
+
+	public int maxMembers() {
+		return BASE_MEMBER_CAPACITY + Math.max(0, level - 1);
 	}
 
 	public int bankBalance() {

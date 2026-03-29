@@ -17,9 +17,6 @@
 	"entrypoints": {
 		"main": [
 			"zeitvertreib.economy.ZeitvertreibEconomy"
-		],
-		"client": [
-			"zeitvertreib.economy.ZeitvertreibEconomyClient"
 		]
 	},
 	"depends": {
