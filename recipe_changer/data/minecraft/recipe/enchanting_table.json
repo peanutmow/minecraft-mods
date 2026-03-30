@@ -1,0 +1,19 @@
+{
+  "type": "minecraft:enchanting_table",
+  "category": "misc",
+  "pattern": [
+    " d",
+    "cac",
+    "aba"
+  ],
+  "key": {
+    "a": "minecraft:obsidian",
+    "b": "minecraft:netherite_ingot",
+    "c": "minecraft:diamond",
+    "d": "minecraft:book"
+  },
+  "result": {
+    "id": "minecraft:enchanting_table",
+    "count": 1
+  }
+}
