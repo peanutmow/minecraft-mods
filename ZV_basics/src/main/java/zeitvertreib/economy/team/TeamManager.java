@@ -369,6 +369,10 @@ public final class TeamManager {
 
 	public void syncDisplays(MinecraftServer server) {
 		ensureLoaded(server);
+		if (!canSyncDisplays(server)) {
+			return;
+		}
+
 		clearManagedDisplayTeams(server);
 
 		ServerScoreboard scoreboard = server.getScoreboard();
@@ -482,6 +486,10 @@ public final class TeamManager {
 	}
 
 	private void clearManagedDisplayTeams(MinecraftServer server) {
+		if (!canSyncDisplays(server)) {
+			return;
+		}
+
 		ServerScoreboard scoreboard = server.getScoreboard();
 		List<PlayerTeam> teamsToRemove = new ArrayList<>();
 		for (PlayerTeam team : scoreboard.getPlayerTeams()) {
@@ -498,6 +506,10 @@ public final class TeamManager {
 	private String getDisplayTeamName(UUID playerId) {
 		String compactUuid = playerId.toString().replace("-", "");
 		return DISPLAY_TEAM_PREFIX + compactUuid.substring(0, 10);
+	}
+
+	private boolean canSyncDisplays(MinecraftServer server) {
+		return server != null && server.getPlayerList() != null && server.getScoreboard() != null;
 	}
 
 	private int countPendingInvites(String teamName) {

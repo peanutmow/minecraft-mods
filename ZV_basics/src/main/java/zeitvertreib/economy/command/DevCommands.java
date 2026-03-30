@@ -26,6 +26,7 @@ import java.util.UUID;
 
 import zeitvertreib.economy.config.EconomyConfig;
 import zeitvertreib.economy.currency.CurrencyManager;
+import zeitvertreib.economy.pvp.PvpManager;
 import zeitvertreib.economy.team.TeamData;
 import zeitvertreib.economy.team.TeamManager;
 import zeitvertreib.economy.trade.TradeOffer;
@@ -36,12 +37,14 @@ public final class DevCommands {
 
 	private final EconomyConfig config;
 	private final CurrencyManager currencyManager;
+	private final PvpManager pvpManager;
 	private final TeamManager teamManager;
 	private final TradeOfferManager tradeOfferManager;
 
-	public DevCommands(EconomyConfig config, CurrencyManager currencyManager, TeamManager teamManager, TradeOfferManager tradeOfferManager) {
+	public DevCommands(EconomyConfig config, CurrencyManager currencyManager, PvpManager pvpManager, TeamManager teamManager, TradeOfferManager tradeOfferManager) {
 		this.config = config;
 		this.currencyManager = currencyManager;
+		this.pvpManager = pvpManager;
 		this.teamManager = teamManager;
 		this.tradeOfferManager = tradeOfferManager;
 	}
@@ -87,6 +90,13 @@ public final class DevCommands {
 						.executes(this::cancelTradeById)))
 				.then(Commands.literal("clearall")
 					.executes(this::clearAllTrades)))
+			.then(Commands.literal("pvp")
+				.then(Commands.literal("info")
+					.then(Commands.argument("player", EntityArgument.player())
+						.executes(this::showPvpInfo)))
+				.then(Commands.literal("reset")
+					.then(Commands.argument("player", EntityArgument.player())
+						.executes(this::resetPvpState))))
 			.then(Commands.literal("team")
 				.then(Commands.literal("list")
 					.executes(this::listTeams))
@@ -139,6 +149,8 @@ public final class DevCommands {
 		context.getSource().sendSuccess(() -> Component.literal("/zvdev trade inspect offer <offerId> - Inspect a specific offer."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zvdev trade cancel <offerId> - Force-cancel and restore escrow."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zvdev trade clearall - Cancel every active trade."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/zvdev pvp info <player> - Inspect a player's PvP state and cooldown."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/zvdev pvp reset <player> - Reset a player to default PvP enabled with no cooldown."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zvdev team list|info <team> - Inspect all teams or one team."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zvdev team create <player> <name> <color> - Force-create a team for a player."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zvdev team join <team> <player> - Force-move a player into a team."), false);
@@ -147,6 +159,39 @@ public final class DevCommands {
 		context.getSource().sendSuccess(() -> Component.literal("/zvdev team bank set|add|remove <team> <amount> - Edit team bank."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zvdev team disband <team> - Delete a team immediately."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zvdev team sync - Rebuild team display tags."), false);
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private int showPvpInfo(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+		ServerPlayer target = EntityArgument.getPlayer(context, "player");
+		PvpManager.PlayerPvpState state = pvpManager.getPlayerState(context.getSource().getServer(), target.getUUID());
+		MutableComponent message = Component.literal("[DEV] PvP for ").withStyle(ChatFormatting.YELLOW)
+			.append(Component.literal(target.getName().getString()).withStyle(ChatFormatting.AQUA))
+			.append(Component.literal(": "))
+			.append(Component.literal(state.pvpEnabled() ? "enabled" : "disabled").withStyle(state.pvpEnabled() ? ChatFormatting.GREEN : ChatFormatting.RED));
+		if (state.lastToggleAtMillis() > 0L) {
+			message.append(Component.literal(" | last changed "))
+				.append(Component.literal(formatTimestamp(state.lastToggleAtMillis())).withStyle(ChatFormatting.GRAY));
+		} else {
+			message.append(Component.literal(" | never changed").withStyle(ChatFormatting.GRAY));
+		}
+		message.append(Component.literal(" | cooldown: "))
+			.append(Component.literal(state.remainingCooldownMillis() > 0L ? formatDuration(state.remainingCooldownMillis()) : "ready").withStyle(state.remainingCooldownMillis() > 0L ? ChatFormatting.YELLOW : ChatFormatting.GREEN));
+		context.getSource().sendSuccess(() -> message, false);
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private int resetPvpState(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+		ServerPlayer target = EntityArgument.getPlayer(context, "player");
+		PvpManager.PlayerPvpState previousState = pvpManager.clearPlayerState(context.getSource().getServer(), target.getUUID());
+		context.getSource().sendSuccess(() -> Component.literal("[DEV] Reset PvP state for ").withStyle(ChatFormatting.YELLOW)
+			.append(Component.literal(target.getName().getString()).withStyle(ChatFormatting.AQUA))
+			.append(Component.literal(". Previous state: "))
+			.append(Component.literal(previousState.pvpEnabled() ? "enabled" : "disabled").withStyle(previousState.pvpEnabled() ? ChatFormatting.GREEN : ChatFormatting.RED))
+			.append(Component.literal(", cooldown was "))
+			.append(Component.literal(previousState.remainingCooldownMillis() > 0L ? formatDuration(previousState.remainingCooldownMillis()) : "ready").withStyle(previousState.remainingCooldownMillis() > 0L ? ChatFormatting.YELLOW : ChatFormatting.GREEN))
+			.append(Component.literal(".")), true);
+		target.sendSystemMessage(Component.literal("Your PvP setting was reset to the default state by an admin.").withStyle(ChatFormatting.YELLOW));
 		return Command.SINGLE_SUCCESS;
 	}
 
@@ -523,6 +568,23 @@ public final class DevCommands {
 
 	private MutableComponent formatCurrency(int amount) {
 		return Component.literal(Math.max(0, amount) + " " + CURRENCY_LABEL).withStyle(ChatFormatting.GOLD);
+	}
+
+	private String formatDuration(long durationMillis) {
+		long totalSeconds = Math.max(1L, (durationMillis + 999L) / 1000L);
+		long minutes = totalSeconds / 60L;
+		long seconds = totalSeconds % 60L;
+		if (minutes == 0L) {
+			return seconds + "s";
+		}
+		return minutes + "m " + seconds + "s";
+	}
+
+	private String formatTimestamp(long epochMillis) {
+		return java.time.Instant.ofEpochMilli(epochMillis)
+			.atZone(java.time.ZoneId.systemDefault())
+			.toLocalDateTime()
+			.toString();
 	}
 
 	private ChatFormatting parseColor(String rawColor) {

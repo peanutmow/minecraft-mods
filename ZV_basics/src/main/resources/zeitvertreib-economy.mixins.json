@@ -1,0 +1,14 @@
+{
+	"required": true,
+	"minVersion": "0.8",
+	"package": "zeitvertreib.economy.mixin",
+	"compatibilityLevel": "JAVA_21",
+	"mixins": [
+		"EnchantingContainerMixin"
+	],
+	"client": [],
+	"server": [],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

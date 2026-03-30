@@ -2,6 +2,7 @@ package zeitvertreib.economy.command;
 
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
@@ -23,6 +24,7 @@ import java.util.UUID;
 
 import zeitvertreib.economy.config.EconomyConfig;
 import zeitvertreib.economy.currency.CurrencyManager;
+import zeitvertreib.economy.pvp.PvpManager;
 import zeitvertreib.economy.trade.TradeOffer;
 import zeitvertreib.economy.trade.TradeOfferManager;
 
@@ -31,17 +33,23 @@ public final class EconomyCommands {
 
 	private final EconomyConfig config;
 	private final CurrencyManager currencyManager;
+	private final PvpManager pvpManager;
 	private final TradeOfferManager tradeOfferManager;
 
-	public EconomyCommands(EconomyConfig config, CurrencyManager currencyManager, TradeOfferManager tradeOfferManager) {
+	public EconomyCommands(EconomyConfig config, CurrencyManager currencyManager, PvpManager pvpManager, TradeOfferManager tradeOfferManager) {
 		this.config = config;
 		this.currencyManager = currencyManager;
+		this.pvpManager = pvpManager;
 		this.tradeOfferManager = tradeOfferManager;
 	}
 
 	public void register(CommandDispatcher<CommandSourceStack> dispatcher, CommandBuildContext registryAccess, Commands.CommandSelection environment) {
 		dispatcher.register(Commands.literal("zv")
 			.executes(this::showHelp)
+			.then(Commands.literal("pvp")
+				.executes(this::showPvpStatus)
+				.then(Commands.argument("enabled", BoolArgumentType.bool())
+					.executes(this::setPvpEnabled)))
 			.then(Commands.literal("trade")
 				.then(Commands.argument("player", EntityArgument.player())
 					.then(Commands.argument("price", IntegerArgumentType.integer(1))
@@ -114,6 +122,55 @@ public final class EconomyCommands {
 			.append(Component.literal(". Your item is reserved for 60 seconds.")), false);
 		buyer.sendSystemMessage(buildTradeRequestMessage(offer));
 		return Command.SINGLE_SUCCESS;
+	}
+
+	private int showPvpStatus(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+		ServerPlayer player = context.getSource().getPlayerOrException();
+		boolean pvpEnabled = pvpManager.isPvpEnabled(context.getSource().getServer(), player.getUUID());
+		long remainingCooldownMillis = pvpManager.getRemainingCooldownMillis(context.getSource().getServer(), player.getUUID());
+		MutableComponent response = Component.literal("Your PvP is currently ")
+			.append(Component.literal(pvpEnabled ? "enabled" : "disabled").withStyle(pvpEnabled ? ChatFormatting.GREEN : ChatFormatting.RED))
+			.append(Component.literal("."));
+		if (remainingCooldownMillis > 0L) {
+			response.append(Component.literal(" You can change it again in "))
+				.append(Component.literal(formatDuration(remainingCooldownMillis)).withStyle(ChatFormatting.YELLOW))
+				.append(Component.literal("."));
+		} else {
+			response.append(Component.literal(" You can change it now with /zv pvp true or /zv pvp false."));
+		}
+		context.getSource().sendSuccess(() -> response, false);
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private int setPvpEnabled(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+		ServerPlayer player = context.getSource().getPlayerOrException();
+		boolean enabled = BoolArgumentType.getBool(context, "enabled");
+		PvpManager.ToggleResult toggleResult = pvpManager.setPvpEnabled(context.getSource().getServer(), player.getUUID(), enabled);
+		switch (toggleResult.status()) {
+			case UPDATED -> {
+				MutableComponent response = Component.literal("Your PvP has been ")
+					.append(Component.literal(toggleResult.pvpEnabled() ? "enabled" : "disabled").withStyle(toggleResult.pvpEnabled() ? ChatFormatting.GREEN : ChatFormatting.RED))
+					.append(Component.literal(". You can change it again in "))
+					.append(Component.literal(formatDuration(toggleResult.remainingCooldownMillis())).withStyle(ChatFormatting.YELLOW))
+					.append(Component.literal("."));
+				context.getSource().sendSuccess(() -> response, false);
+				return Command.SINGLE_SUCCESS;
+			}
+			case ALREADY_SET -> {
+				context.getSource().sendFailure(Component.literal("Your PvP is already ")
+					.append(Component.literal(toggleResult.pvpEnabled() ? "enabled" : "disabled").withStyle(toggleResult.pvpEnabled() ? ChatFormatting.GREEN : ChatFormatting.RED))
+					.append(Component.literal(".")));
+				return 0;
+			}
+			case COOLDOWN_ACTIVE -> {
+				context.getSource().sendFailure(Component.literal("You can change your PvP setting again in ")
+					.append(Component.literal(formatDuration(toggleResult.remainingCooldownMillis())).withStyle(ChatFormatting.YELLOW))
+					.append(Component.literal(".")));
+				return 0;
+			}
+		}
+
+		return 0;
 	}
 
 	private int acceptTrade(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
@@ -324,6 +381,8 @@ public final class EconomyCommands {
 		context.getSource().sendSuccess(() -> Component.literal("/zv balance - Show your balance."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zv balance <player> - Admin: view player balance."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zv balance rank - Show top 10 richest players."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/zv pvp - Show whether you are opted in to PvP."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/zv pvp <true|false> - Toggle PvP participation with a 10 minute cooldown."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zv team create <name> <color> - Create a team (colors: all vanilla Minecraft text colors, e.g. red, dark_red, gold, aqua)."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zv team invite <player> - Invite someone to your team."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zv team accept <team> - Accept a pending invite."), false);
@@ -376,5 +435,15 @@ public final class EconomyCommands {
 
 	private MutableComponent formatCurrency(int amount) {
 		return Component.literal(amount + " " + CURRENCY_LABEL).withStyle(ChatFormatting.GOLD);
+	}
+
+	private String formatDuration(long durationMillis) {
+		long totalSeconds = Math.max(1L, (durationMillis + 999L) / 1000L);
+		long minutes = totalSeconds / 60L;
+		long seconds = totalSeconds % 60L;
+		if (minutes == 0L) {
+			return seconds + "s";
+		}
+		return minutes + "m " + seconds + "s";
 	}
 }
