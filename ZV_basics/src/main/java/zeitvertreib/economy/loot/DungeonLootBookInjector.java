@@ -2,12 +2,16 @@ package zeitvertreib.economy.loot;
 
 import net.fabricmc.fabric.api.loot.v3.LootTableEvents;
 import net.fabricmc.fabric.api.loot.v3.LootTableSource;
+import net.minecraft.core.Holder;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.tags.EnchantmentTags;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
-import net.minecraft.world.level.storage.loot.BuiltInLootTables;
+import net.minecraft.world.item.enchantment.Enchantment;
+import net.minecraft.world.item.enchantment.EnchantmentHelper;
+import net.minecraft.world.level.storage.loot.LootContext;
 import net.minecraft.world.level.storage.loot.LootPool;
 import net.minecraft.world.level.storage.loot.LootTable;
 import net.minecraft.world.level.storage.loot.entries.LootItem;
@@ -15,14 +19,19 @@ import net.minecraft.world.level.storage.loot.functions.SetEnchantmentsFunction;
 import net.minecraft.world.level.storage.loot.predicates.LootItemRandomChanceCondition;
 import net.minecraft.world.level.storage.loot.providers.number.ConstantValue;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public final class DungeonLootBookInjector {
 	private static final float DUNGEON_BOOK_CHANCE = 0.25F;
+	private static final String CHEST_TABLE_PATH_PREFIX = "chests/";
 
 	private DungeonLootBookInjector() {
 	}
 
 	public static void register() {
 		LootTableEvents.MODIFY.register(DungeonLootBookInjector::modifyLootTable);
+		LootTableEvents.MODIFY_DROPS.register(DungeonLootBookInjector::modifyLootDrops);
 	}
 
 	private static void modifyLootTable(
@@ -31,13 +40,13 @@ public final class DungeonLootBookInjector {
 		LootTableSource source,
 		HolderLookup.Provider registries
 	) {
-		if (source != LootTableSource.VANILLA || !BuiltInLootTables.SIMPLE_DUNGEON.equals(lootTableKey)) {
+		if (source != LootTableSource.VANILLA || !isChestTable(lootTableKey)) {
 			return;
 		}
 
 		var enchantmentLookup = registries.lookupOrThrow(Registries.ENCHANTMENT);
-		var randomLootEnchantments = enchantmentLookup.get(EnchantmentTags.ON_RANDOM_LOOT);
-		if (randomLootEnchantments.isEmpty()) {
+		var allEnchantments = enchantmentLookup.listElements().toList();
+		if (allEnchantments.isEmpty()) {
 			return;
 		}
 
@@ -45,11 +54,41 @@ public final class DungeonLootBookInjector {
 			.setRolls(ConstantValue.exactly(1.0F))
 			.when(LootItemRandomChanceCondition.randomChance(DUNGEON_BOOK_CHANCE));
 
-		randomLootEnchantments.get().forEach(enchantmentHolder -> enchantedBookPool.add(
-			LootItem.lootTableItem(Items.ENCHANTED_BOOK)
-				.apply(new SetEnchantmentsFunction.Builder()
-					.withEnchantment(enchantmentHolder, ConstantValue.exactly(1.0F)))));
+		for (Holder<Enchantment> enchantmentHolder : allEnchantments) {
+			enchantedBookPool.add(
+				LootItem.lootTableItem(Items.ENCHANTED_BOOK)
+					.apply(new SetEnchantmentsFunction.Builder()
+						.withEnchantment(enchantmentHolder, ConstantValue.exactly(1.0F)))
+			);
+		}
 
 		tableBuilder.withPool(enchantedBookPool);
+	}
+
+	private static void modifyLootDrops(Holder<LootTable> lootTableHolder, LootContext context, List<ItemStack> generatedLoot) {
+		if (lootTableHolder.unwrapKey().filter(DungeonLootBookInjector::isChestTable).isEmpty()) {
+			return;
+		}
+
+		for (ItemStack stack : generatedLoot) {
+			if (!stack.is(Items.ENCHANTED_BOOK)) {
+				continue;
+			}
+			clampEnchantmentsToLevelOne(stack);
+		}
+	}
+
+	private static boolean isChestTable(ResourceKey<LootTable> lootTableKey) {
+		Identifier id = lootTableKey.identifier();
+		return "minecraft".equals(id.getNamespace()) && id.getPath().startsWith(CHEST_TABLE_PATH_PREFIX);
+	}
+
+	private static void clampEnchantmentsToLevelOne(ItemStack stack) {
+		EnchantmentHelper.updateEnchantments(stack, mutableEnchantments -> {
+			List<Holder<Enchantment>> enchantments = new ArrayList<>(mutableEnchantments.keySet());
+			for (Holder<Enchantment> enchantmentHolder : enchantments) {
+				mutableEnchantments.set(enchantmentHolder, 1);
+			}
+		});
 	}
 }

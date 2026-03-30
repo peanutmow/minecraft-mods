@@ -21,7 +21,7 @@ public class LibrarianEnchantedBookTradeMixin {
 		RandomSource random,
 		CallbackInfoReturnable<MerchantOffer> cir
 	) {
-		if (entity instanceof Villager villager && villager.getVillagerData().profession() == VillagerProfession.LIBRARIAN) {
+		if (entity instanceof Villager villager && villager.getVillagerData().profession().is(VillagerProfession.LIBRARIAN)) {
 			cir.setReturnValue(null);
 		}
 	}
