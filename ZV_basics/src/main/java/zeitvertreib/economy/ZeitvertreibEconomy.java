@@ -16,6 +16,7 @@ import zeitvertreib.economy.command.TeamCommands;
 import zeitvertreib.economy.config.EconomyConfig;
 import zeitvertreib.economy.currency.CurrencyManager;
 import zeitvertreib.economy.loot.DungeonLootBookInjector;
+import zeitvertreib.economy.loot.DiamondOreDropModifier;
 import zeitvertreib.economy.pvp.PvpManager;
 import zeitvertreib.economy.team.TeamManager;
 import zeitvertreib.economy.trade.TradeOfferManager;
@@ -38,7 +39,10 @@ public class ZeitvertreibEconomy implements ModInitializer {
 		EconomyCommands commands = new EconomyCommands(CONFIG, CURRENCY_MANAGER, PVP_MANAGER, TRADE_OFFER_MANAGER);
 		DevCommands devCommands = new DevCommands(CONFIG, CURRENCY_MANAGER, PVP_MANAGER, TEAM_MANAGER, TRADE_OFFER_MANAGER);
 		TeamCommands teamCommands = new TeamCommands(CURRENCY_MANAGER, TEAM_MANAGER);
+
 		DungeonLootBookInjector.register();
+		DiamondOreDropModifier.register();
+
 		CommandRegistrationCallback.EVENT.register(commands::register);
 		CommandRegistrationCallback.EVENT.register(devCommands::register);
 		CommandRegistrationCallback.EVENT.register(teamCommands::register);

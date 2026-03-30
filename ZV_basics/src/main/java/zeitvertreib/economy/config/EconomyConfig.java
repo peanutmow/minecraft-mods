@@ -20,12 +20,14 @@ public final class EconomyConfig {
 	private static final boolean DEFAULT_BLOCK_LIBRARIAN_BOOK_TRADES = true;
 	private static final int DEFAULT_MAX_PLAYER_EXPERIENCE_LEVEL = 30;
 	private static final float DEFAULT_DUNGEON_BOOK_CHANCE = 0.25F;
+	private static final float DEFAULT_DIAMOND_DROP_CHANCE = 0.20F;
 
 	private double tradeTaxPercent = DEFAULT_TRADE_TAX_PERCENT;
 	private int anvilXpCost = DEFAULT_ANVIL_XP_COST;
 	private boolean blockLibrarianBookTrades = DEFAULT_BLOCK_LIBRARIAN_BOOK_TRADES;
 	private int maxPlayerExperienceLevel = DEFAULT_MAX_PLAYER_EXPERIENCE_LEVEL;
 	private float dungeonBookChance = DEFAULT_DUNGEON_BOOK_CHANCE;
+	private float diamondDropChance = DEFAULT_DIAMOND_DROP_CHANCE;
 
 	public void load() {
 		Path configPath = getConfigPath();
@@ -44,6 +46,7 @@ public final class EconomyConfig {
 			blockLibrarianBookTrades = !jsonObject.has("blockLibrarianBookTrades") || jsonObject.get("blockLibrarianBookTrades").getAsBoolean();
 			maxPlayerExperienceLevel = jsonObject.has("maxPlayerExperienceLevel") ? jsonObject.get("maxPlayerExperienceLevel").getAsInt() : DEFAULT_MAX_PLAYER_EXPERIENCE_LEVEL;
 			dungeonBookChance = jsonObject.has("dungeonBookChance") ? jsonObject.get("dungeonBookChance").getAsFloat() : DEFAULT_DUNGEON_BOOK_CHANCE;
+			diamondDropChance = jsonObject.has("diamondDropChance") ? jsonObject.get("diamondDropChance").getAsFloat() : DEFAULT_DIAMOND_DROP_CHANCE;
 			sanitize();
 			save(configPath);
 		} catch (Exception exception) {
@@ -52,6 +55,7 @@ public final class EconomyConfig {
 			blockLibrarianBookTrades = DEFAULT_BLOCK_LIBRARIAN_BOOK_TRADES;
 			maxPlayerExperienceLevel = DEFAULT_MAX_PLAYER_EXPERIENCE_LEVEL;
 			dungeonBookChance = DEFAULT_DUNGEON_BOOK_CHANCE;
+			diamondDropChance = DEFAULT_DIAMOND_DROP_CHANCE;
 			ZeitvertreibEconomy.LOGGER.error("Failed to load config from {}. Falling back to defaults.", configPath, exception);
 			save(configPath);
 		}
@@ -75,6 +79,10 @@ public final class EconomyConfig {
 
 	public float getDungeonBookChance() {
 		return dungeonBookChance;
+	}
+
+	public float getDiamondDropChance() {
+		return diamondDropChance;
 	}
 
 	public int calculateTax(int grossPrice) {
@@ -105,6 +113,10 @@ public final class EconomyConfig {
 			dungeonBookChance = DEFAULT_DUNGEON_BOOK_CHANCE;
 		}
 		dungeonBookChance = Math.max(0.0F, Math.min(1.0F, dungeonBookChance));
+		if (Float.isNaN(diamondDropChance) || Float.isInfinite(diamondDropChance)) {
+			diamondDropChance = DEFAULT_DIAMOND_DROP_CHANCE;
+		}
+		diamondDropChance = Math.max(0.0F, Math.min(1.0F, diamondDropChance));
 	}
 
 	private void save(Path configPath) {
@@ -114,6 +126,7 @@ public final class EconomyConfig {
 		jsonObject.addProperty("blockLibrarianBookTrades", blockLibrarianBookTrades);
 		jsonObject.addProperty("maxPlayerExperienceLevel", maxPlayerExperienceLevel);
 		jsonObject.addProperty("dungeonBookChance", dungeonBookChance);
+		jsonObject.addProperty("diamondDropChance", diamondDropChance);
 
 		try {
 			Files.createDirectories(configPath.getParent());
