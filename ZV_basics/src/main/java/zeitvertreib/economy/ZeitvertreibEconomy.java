@@ -12,10 +12,10 @@ import org.slf4j.LoggerFactory;
 
 import zeitvertreib.economy.command.DevCommands;
 import zeitvertreib.economy.command.EconomyCommands;
-import zeitvertreib.economy.command.PenchantCommands;
 import zeitvertreib.economy.command.TeamCommands;
 import zeitvertreib.economy.config.EconomyConfig;
 import zeitvertreib.economy.currency.CurrencyManager;
+import zeitvertreib.economy.loot.DungeonLootBookInjector;
 import zeitvertreib.economy.pvp.PvpManager;
 import zeitvertreib.economy.team.TeamManager;
 import zeitvertreib.economy.trade.TradeOfferManager;
@@ -38,11 +38,10 @@ public class ZeitvertreibEconomy implements ModInitializer {
 		EconomyCommands commands = new EconomyCommands(CONFIG, CURRENCY_MANAGER, PVP_MANAGER, TRADE_OFFER_MANAGER);
 		DevCommands devCommands = new DevCommands(CONFIG, CURRENCY_MANAGER, PVP_MANAGER, TEAM_MANAGER, TRADE_OFFER_MANAGER);
 		TeamCommands teamCommands = new TeamCommands(CURRENCY_MANAGER, TEAM_MANAGER);
-		PenchantCommands penchantCommands = new PenchantCommands();
+		DungeonLootBookInjector.register();
 		CommandRegistrationCallback.EVENT.register(commands::register);
 		CommandRegistrationCallback.EVENT.register(devCommands::register);
 		CommandRegistrationCallback.EVENT.register(teamCommands::register);
-		CommandRegistrationCallback.EVENT.register(penchantCommands::register);
 		ServerLivingEntityEvents.ALLOW_DAMAGE.register((entity, damageSource, damageAmount) -> {
 			if (!(entity instanceof net.minecraft.server.level.ServerPlayer targetPlayer)) {
 				return true;
