@@ -11,10 +11,10 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyConstant;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+import zeitvertreib.economy.ZeitvertreibEconomy;
 
 @Mixin(AnvilMenu.class)
 public abstract class AnvilCostMixin {
-	private static final int CONSTANT_ANVIL_XP_COST = 5;
 
 	@Shadow
 	@Final
@@ -34,7 +34,7 @@ public abstract class AnvilCostMixin {
 	private void zeitvertreib$setConstantAnvilCost(CallbackInfo ci) {
 		// cost > 0 means vanilla found a valid output; clamp it to our constant
 		if (this.cost.get() > 0) {
-			this.cost.set(CONSTANT_ANVIL_XP_COST);
+			this.cost.set(ZeitvertreibEconomy.CONFIG.getAnvilXpCost());
 		}
 	}
 

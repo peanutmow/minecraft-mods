@@ -23,7 +23,6 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class DungeonLootBookInjector {
-	private static final float DUNGEON_BOOK_CHANCE = 0.25F;
 	private static final String CHEST_TABLE_PATH_PREFIX = "chests/";
 
 	private DungeonLootBookInjector() {
@@ -52,7 +51,7 @@ public final class DungeonLootBookInjector {
 
 		LootPool.Builder enchantedBookPool = LootPool.lootPool()
 			.setRolls(ConstantValue.exactly(1.0F))
-			.when(LootItemRandomChanceCondition.randomChance(DUNGEON_BOOK_CHANCE));
+			.when(LootItemRandomChanceCondition.randomChance(zeitvertreib.economy.ZeitvertreibEconomy.CONFIG.getDungeonBookChance()));
 
 		for (Holder<Enchantment> enchantmentHolder : allEnchantments) {
 			enchantedBookPool.add(

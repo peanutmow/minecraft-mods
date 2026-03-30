@@ -11,6 +11,7 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+import zeitvertreib.economy.ZeitvertreibEconomy;
 
 @Mixin(VillagerTrades.EnchantBookForEmeralds.class)
 public class LibrarianEnchantedBookTradeMixin {
@@ -21,7 +22,9 @@ public class LibrarianEnchantedBookTradeMixin {
 		RandomSource random,
 		CallbackInfoReturnable<MerchantOffer> cir
 	) {
-		if (entity instanceof Villager villager && villager.getVillagerData().profession().is(VillagerProfession.LIBRARIAN)) {
+		if (ZeitvertreibEconomy.CONFIG.isBlockLibrarianBookTrades()
+				&& entity instanceof Villager villager
+				&& villager.getVillagerData().profession().is(VillagerProfession.LIBRARIAN)) {
 			cir.setReturnValue(null);
 		}
 	}
