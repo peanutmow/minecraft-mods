@@ -26,6 +26,7 @@ public final class EconomyConfig {
 	private static final boolean DEFAULT_IRON_ENABLED = true;
 	private static final boolean DEFAULT_NETHER_PORTALS_ENABLED = true;
 	private static final boolean DEFAULT_END_ENABLED = true;
+	private static final boolean DEFAULT_REQUIRE_COPPER_FOR_IRON = true;
 
 	private double tradeTaxPercent = DEFAULT_TRADE_TAX_PERCENT;
 	private int anvilXpCost = DEFAULT_ANVIL_XP_COST;
@@ -38,6 +39,7 @@ public final class EconomyConfig {
 	private boolean ironEnabled = DEFAULT_IRON_ENABLED;
 	private boolean netherPortalsEnabled = DEFAULT_NETHER_PORTALS_ENABLED;
 	private boolean endEnabled = DEFAULT_END_ENABLED;
+	private boolean requireCopperForIron = DEFAULT_REQUIRE_COPPER_FOR_IRON;
 
 	public void load() {
 		Path configPath = getConfigPath();
@@ -62,6 +64,7 @@ public final class EconomyConfig {
 			ironEnabled = !jsonObject.has("ironEnabled") || jsonObject.get("ironEnabled").getAsBoolean();
 			netherPortalsEnabled = !jsonObject.has("netherPortalsEnabled") || jsonObject.get("netherPortalsEnabled").getAsBoolean();
 			endEnabled = !jsonObject.has("endEnabled") || jsonObject.get("endEnabled").getAsBoolean();
+			requireCopperForIron = !jsonObject.has("requireCopperForIron") || jsonObject.get("requireCopperForIron").getAsBoolean();
 			sanitize();
 			save(configPath);
 		} catch (Exception exception) {
@@ -76,6 +79,7 @@ public final class EconomyConfig {
 			ironEnabled = DEFAULT_IRON_ENABLED;
 			netherPortalsEnabled = DEFAULT_NETHER_PORTALS_ENABLED;
 			endEnabled = DEFAULT_END_ENABLED;
+			requireCopperForIron = DEFAULT_REQUIRE_COPPER_FOR_IRON;
 			ZeitvertreibEconomy.LOGGER.error("Failed to load config from {}. Falling back to defaults.", configPath, exception);
 			save(configPath);
 		}
@@ -123,6 +127,10 @@ public final class EconomyConfig {
 
 	public boolean isEndEnabled() {
 		return endEnabled;
+	}
+
+	public boolean isRequireCopperForIron() {
+		return requireCopperForIron;
 	}
 
 	public int calculateTax(int grossPrice) {
@@ -184,6 +192,7 @@ public final class EconomyConfig {
 		jsonObject.addProperty("ironEnabled", ironEnabled);
 		jsonObject.addProperty("netherPortalsEnabled", netherPortalsEnabled);
 		jsonObject.addProperty("endEnabled", endEnabled);
+		jsonObject.addProperty("requireCopperForIron", requireCopperForIron);
 
 		try {
 			Files.createDirectories(configPath.getParent());

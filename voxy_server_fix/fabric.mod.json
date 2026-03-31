@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "id": "voxyserver",
+  "version": "1.1.4",
+  "name": "VoxyServer",
+  "description": "",
+  "authors": [],
+  "contact": {},
+  "license": "All-Rights-Reserved",
+  "icon": "assets/voxyserver/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "fabric-datagen": [
+      "com.dripps.voxyserver.client.VoxyserverDataGenerator"
+    ],
+    "client": [
+      "com.dripps.voxyserver.client.VoxyserverClient"
+    ],
+    "main": [
+      "com.dripps.voxyserver.Voxyserver"
+    ],
+    "modmenu": [
+      "com.dripps.voxyserver.client.VoxyModMenuIntegration"
+    ]
+  },
+  "mixins": [
+    "voxyserver.mixins.json",
+    {
+      "config": "voxyserver.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "fabricloader": "\u003e\u003d0.18.4",
+    "fabric-api": "*",
+    "minecraft": "1.21.11"
+  },
+  "suggests": {
+    "voxy": "*",
+    "modmenu": "*",
+    "cloth-config": "*"
+  },
+  "jars": [
+    {
+      "file": "META-INF/jars/lwjgl-3.3.3-natives-linux-arm64.jar"
+    },
+    {
+      "file": "META-INF/jars/lwjgl-3.3.3-natives-linux.jar"
+    },
+    {
+      "file": "META-INF/jars/lwjgl-3.3.3-natives-windows.jar"
+    },
+    {
+      "file": "META-INF/jars/lwjgl-3.3.3.jar"
+    }
+  ]
+}

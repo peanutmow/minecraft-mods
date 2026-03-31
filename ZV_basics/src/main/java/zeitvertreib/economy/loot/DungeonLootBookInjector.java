@@ -9,13 +9,14 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.world.item.enchantment.Enchantment;
-import net.minecraft.world.item.enchantment.EnchantmentHelper;
+import net.minecraft.world.item.enchantment.ItemEnchantments;
 import net.minecraft.world.level.storage.loot.LootContext;
 import net.minecraft.world.level.storage.loot.LootPool;
 import net.minecraft.world.level.storage.loot.LootTable;
 import net.minecraft.world.level.storage.loot.entries.LootItem;
-import net.minecraft.world.level.storage.loot.functions.SetEnchantmentsFunction;
+import net.minecraft.world.level.storage.loot.functions.EnchantRandomlyFunction;
 import net.minecraft.world.level.storage.loot.predicates.LootItemRandomChanceCondition;
 import net.minecraft.world.level.storage.loot.providers.number.ConstantValue;
 
@@ -56,8 +57,9 @@ public final class DungeonLootBookInjector {
 		for (Holder<Enchantment> enchantmentHolder : allEnchantments) {
 			enchantedBookPool.add(
 				LootItem.lootTableItem(Items.ENCHANTED_BOOK)
-					.apply(new SetEnchantmentsFunction.Builder()
-						.withEnchantment(enchantmentHolder, ConstantValue.exactly(1.0F)))
+					.apply(EnchantRandomlyFunction.randomEnchantment()
+						.withEnchantment(enchantmentHolder)
+						.allowingIncompatibleEnchantments())
 			);
 		}
 
@@ -83,11 +85,13 @@ public final class DungeonLootBookInjector {
 	}
 
 	private static void clampEnchantmentsToLevelOne(ItemStack stack) {
-		EnchantmentHelper.updateEnchantments(stack, mutableEnchantments -> {
-			List<Holder<Enchantment>> enchantments = new ArrayList<>(mutableEnchantments.keySet());
-			for (Holder<Enchantment> enchantmentHolder : enchantments) {
-				mutableEnchantments.set(enchantmentHolder, 1);
-			}
-		});
+		ItemEnchantments stored = stack.get(DataComponents.STORED_ENCHANTMENTS);
+		if (stored == null || stored.isEmpty()) return;
+		ItemEnchantments.Mutable mutable = new ItemEnchantments.Mutable(stored);
+		List<Holder<Enchantment>> enchantments = new ArrayList<>(mutable.keySet());
+		for (Holder<Enchantment> enchantmentHolder : enchantments) {
+			mutable.set(enchantmentHolder, 1);
+		}
+		stack.set(DataComponents.STORED_ENCHANTMENTS, mutable.toImmutable());
 	}
 }

@@ -5,7 +5,15 @@ import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,6 +52,25 @@ public class ZeitvertreibEconomy implements ModInitializer {
 		DungeonLootBookInjector.register();
 		DiamondOreDropModifier.register();
 		IronOreDropModifier.register();
+
+		PlayerBlockBreakEvents.BEFORE.register((world, player, pos, state, blockEntity) -> {
+			if (!CONFIG.isRequireCopperForIron()) return true;
+			if (player.isCreative()) return true;
+
+			Block block = state.getBlock();
+			if (block != Blocks.IRON_ORE && block != Blocks.DEEPSLATE_IRON_ORE) return true;
+
+			Item held = player.getMainHandItem().getItem();
+			if (held == Items.COPPER_PICKAXE || held == Items.IRON_PICKAXE
+					|| held == Items.DIAMOND_PICKAXE || held == Items.NETHERITE_PICKAXE) {
+				return true;
+			}
+
+			if (player instanceof ServerPlayer sp) {
+				sp.sendSystemMessage(Component.literal("You need a copper pickaxe or better to mine iron ore."));
+			}
+			return false;
+		});
 
 		CommandRegistrationCallback.EVENT.register(commands::register);
 		CommandRegistrationCallback.EVENT.register(devCommands::register);

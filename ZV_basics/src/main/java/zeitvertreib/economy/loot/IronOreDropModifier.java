@@ -26,10 +26,31 @@ public final class IronOreDropModifier {
 
 		List<ItemStack> toRemove = new ArrayList<>();
 		for (ItemStack stack : generatedLoot) {
-			if (stack.is(Items.RAW_IRON) || stack.is(Items.IRON_INGOT)) {
+			if (isIronItem(stack)) {
 				toRemove.add(stack);
 			}
 		}
 		generatedLoot.removeAll(toRemove);
+	}
+
+	private static boolean isIronItem(ItemStack stack) {
+		return stack.is(Items.RAW_IRON)
+			|| stack.is(Items.RAW_IRON_BLOCK)
+			|| stack.is(Items.IRON_INGOT)
+			|| stack.is(Items.IRON_NUGGET)
+			|| stack.is(Items.IRON_SWORD)
+			|| stack.is(Items.IRON_PICKAXE)
+			|| stack.is(Items.IRON_AXE)
+			|| stack.is(Items.IRON_SHOVEL)
+			|| stack.is(Items.IRON_HOE)
+			|| stack.is(Items.IRON_HELMET)
+			|| stack.is(Items.IRON_CHESTPLATE)
+			|| stack.is(Items.IRON_LEGGINGS)
+			|| stack.is(Items.IRON_BOOTS)
+			|| stack.is(Items.IRON_HORSE_ARMOR)
+			|| stack.is(Items.CHAINMAIL_HELMET)
+			|| stack.is(Items.CHAINMAIL_CHESTPLATE)
+			|| stack.is(Items.CHAINMAIL_LEGGINGS)
+			|| stack.is(Items.CHAINMAIL_BOOTS);
 	}
 }
