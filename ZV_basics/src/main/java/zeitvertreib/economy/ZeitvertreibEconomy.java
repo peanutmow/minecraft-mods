@@ -20,7 +20,11 @@ import org.slf4j.LoggerFactory;
 
 import zeitvertreib.economy.command.DevCommands;
 import zeitvertreib.economy.command.EconomyCommands;
+import zeitvertreib.economy.command.SellCommands;
 import zeitvertreib.economy.command.TeamCommands;
+import zeitvertreib.economy.command.TpaCommands;
+import zeitvertreib.economy.tpa.TpaManager;
+import zeitvertreib.economy.sell.SellMarketManager;
 import zeitvertreib.economy.config.EconomyConfig;
 import zeitvertreib.economy.currency.CurrencyManager;
 import zeitvertreib.economy.loot.DungeonLootBookInjector;
@@ -37,6 +41,8 @@ public class ZeitvertreibEconomy implements ModInitializer {
 	public static final PvpManager PVP_MANAGER = new PvpManager();
 	public static final TeamManager TEAM_MANAGER = new TeamManager();
 	public static final TradeOfferManager TRADE_OFFER_MANAGER = new TradeOfferManager();
+	public static final TpaManager TPA_MANAGER = new TpaManager();
+	public static final SellMarketManager SELL_MARKET = new SellMarketManager();
 
 	// This logger is used to write text to the console and the log file.
 	// It is considered best practice to use your mod id as the logger's name.
@@ -46,8 +52,10 @@ public class ZeitvertreibEconomy implements ModInitializer {
 	@Override
 	public void onInitialize() {
 		EconomyCommands commands = new EconomyCommands(CONFIG, CURRENCY_MANAGER, PVP_MANAGER, TRADE_OFFER_MANAGER);
-		DevCommands devCommands = new DevCommands(CONFIG, CURRENCY_MANAGER, PVP_MANAGER, TEAM_MANAGER, TRADE_OFFER_MANAGER);
+		DevCommands devCommands = new DevCommands(CONFIG, CURRENCY_MANAGER, PVP_MANAGER, TEAM_MANAGER, TRADE_OFFER_MANAGER, SELL_MARKET);
 		TeamCommands teamCommands = new TeamCommands(CURRENCY_MANAGER, TEAM_MANAGER);
+		TpaCommands tpaCommands = new TpaCommands(CURRENCY_MANAGER, TPA_MANAGER);
+		SellCommands sellCommands = new SellCommands(CURRENCY_MANAGER, SELL_MARKET);
 
 		DungeonLootBookInjector.register();
 		DiamondOreDropModifier.register();
@@ -74,8 +82,7 @@ public class ZeitvertreibEconomy implements ModInitializer {
 
 		CommandRegistrationCallback.EVENT.register(commands::register);
 		CommandRegistrationCallback.EVENT.register(devCommands::register);
-		CommandRegistrationCallback.EVENT.register(teamCommands::register);
-		ServerLivingEntityEvents.ALLOW_DAMAGE.register((entity, damageSource, damageAmount) -> {
+		CommandRegistrationCallback.EVENT.register(teamCommands::register);			CommandRegistrationCallback.EVENT.register(tpaCommands::register);			CommandRegistrationCallback.EVENT.register(sellCommands::register);		ServerLivingEntityEvents.ALLOW_DAMAGE.register((entity, damageSource, damageAmount) -> {
 			if (!(entity instanceof net.minecraft.server.level.ServerPlayer targetPlayer)) {
 				return true;
 			}
@@ -90,10 +97,14 @@ public class ZeitvertreibEconomy implements ModInitializer {
 		});
 		ServerTickEvents.END_SERVER_TICK.register(TRADE_OFFER_MANAGER::cleanupExpiredOffers);
 		ServerTickEvents.END_SERVER_TICK.register(TEAM_MANAGER::cleanupExpiredInvites);
+		ServerTickEvents.END_SERVER_TICK.register(TPA_MANAGER::cleanupExpiredRequests);
+		ServerTickEvents.END_SERVER_TICK.register(server -> TPA_MANAGER.tickPendingTeleports(server, CURRENCY_MANAGER));
+		ServerTickEvents.END_SERVER_TICK.register(SELL_MARKET::tick);
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> TEAM_MANAGER.syncDisplays(server));
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
 			TRADE_OFFER_MANAGER.cancelOffersForPlayer(server, handler.getPlayer());
 			TEAM_MANAGER.clearDisplayForPlayer(server, handler.getPlayer());
+			TPA_MANAGER.cancelPendingTeleportForPlayer(server, handler.getPlayer().getUUID(), CURRENCY_MANAGER);
 		});
 		ServerLifecycleEvents.SERVER_STARTING.register(server -> {
 			CONFIG.load();
@@ -102,6 +113,9 @@ public class ZeitvertreibEconomy implements ModInitializer {
 			PVP_MANAGER.attachServer(server);
 			TEAM_MANAGER.load(server);
 			TRADE_OFFER_MANAGER.reset();
+			TPA_MANAGER.reset();
+			SELL_MARKET.reset();
+			SELL_MARKET.load(server);
 		});
 		ServerLifecycleEvents.SERVER_STARTED.register(TEAM_MANAGER::syncDisplays);
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
@@ -110,6 +124,7 @@ public class ZeitvertreibEconomy implements ModInitializer {
 			PVP_MANAGER.reset();
 			TEAM_MANAGER.reset();
 			TRADE_OFFER_MANAGER.reset();
+			SELL_MARKET.reset();
 		});
 
 		LOGGER.info("Zeitvertreib Economy initialized");

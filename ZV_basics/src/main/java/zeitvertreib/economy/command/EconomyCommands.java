@@ -396,6 +396,10 @@ public final class EconomyCommands {
 		context.getSource().sendSuccess(() -> Component.literal("/teams - List all teams."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/teams ranked - Rank teams"), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zv team leave - Leave your current team."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/sell - Sell the item in your main hand (1 at a time)."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/sell <amount> - Sell multiple of the held item."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/sell all - Sell all sellable items across your inventory."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/sell list [page] - Browse current item sell prices."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zv help - Show this help message."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zvdev help - OP-only developer and debugging commands."), false);
 		return Command.SINGLE_SUCCESS;

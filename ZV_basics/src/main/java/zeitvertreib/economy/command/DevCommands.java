@@ -11,11 +11,14 @@ import net.minecraft.commands.CommandBuildContext;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.arguments.EntityArgument;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 
 import java.util.ArrayList;
@@ -27,6 +30,7 @@ import java.util.UUID;
 import zeitvertreib.economy.config.EconomyConfig;
 import zeitvertreib.economy.currency.CurrencyManager;
 import zeitvertreib.economy.pvp.PvpManager;
+import zeitvertreib.economy.sell.SellMarketManager;
 import zeitvertreib.economy.team.TeamData;
 import zeitvertreib.economy.team.TeamManager;
 import zeitvertreib.economy.trade.TradeOffer;
@@ -40,13 +44,15 @@ public final class DevCommands {
 	private final PvpManager pvpManager;
 	private final TeamManager teamManager;
 	private final TradeOfferManager tradeOfferManager;
+	private final SellMarketManager sellMarketManager;
 
-	public DevCommands(EconomyConfig config, CurrencyManager currencyManager, PvpManager pvpManager, TeamManager teamManager, TradeOfferManager tradeOfferManager) {
+	public DevCommands(EconomyConfig config, CurrencyManager currencyManager, PvpManager pvpManager, TeamManager teamManager, TradeOfferManager tradeOfferManager, SellMarketManager sellMarketManager) {
 		this.config = config;
 		this.currencyManager = currencyManager;
 		this.pvpManager = pvpManager;
 		this.teamManager = teamManager;
 		this.tradeOfferManager = tradeOfferManager;
+		this.sellMarketManager = sellMarketManager;
 	}
 
 	public void register(CommandDispatcher<CommandSourceStack> dispatcher, CommandBuildContext registryAccess, Commands.CommandSelection environment) {
@@ -136,7 +142,24 @@ public final class DevCommands {
 							.then(Commands.argument("amount", IntegerArgumentType.integer(1))
 								.executes(this::removeTeamBank)))))
 				.then(Commands.literal("sync")
-					.executes(this::syncTeamDisplays))));
+				.executes(this::syncTeamDisplays)))
+		.then(Commands.literal("sell")
+			.then(Commands.literal("inspect")
+				.executes(this::sellInspectAll)
+				.then(Commands.argument("item", StringArgumentType.word())
+					.executes(this::sellInspectItem)))
+			.then(Commands.literal("volume")
+				.then(Commands.literal("set")
+					.then(Commands.argument("item", StringArgumentType.word())
+						.then(Commands.argument("amount", IntegerArgumentType.integer(0))
+							.executes(this::sellVolumeSet))))
+				.then(Commands.literal("reset")
+					.then(Commands.argument("item", StringArgumentType.word())
+						.executes(this::sellVolumeReset)))
+				.then(Commands.literal("resetall")
+					.executes(this::sellVolumeResetAll)))
+			.then(Commands.literal("decay")
+				.executes(this::sellForceDecay))));
 	}
 
 	private int showHelp(CommandContext<CommandSourceStack> context) {
@@ -159,6 +182,12 @@ public final class DevCommands {
 		context.getSource().sendSuccess(() -> Component.literal("/zvdev team bank set|add|remove <team> <amount> - Edit team bank."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zvdev team disband <team> - Delete a team immediately."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zvdev team sync - Rebuild team display tags."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/zvdev sell inspect - List all items with active market pressure."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/zvdev sell inspect <item> - Show volume + base + current price for one item."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/zvdev sell volume set <item> <amount> - Manually override sold volume for an item."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/zvdev sell volume reset <item> - Reset sold volume for one item to 0."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/zvdev sell volume resetall - Reset all sold volumes (restore base prices)."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/zvdev sell decay - Force one market decay step immediately."), false);
 		return Command.SINGLE_SUCCESS;
 	}
 
@@ -590,5 +619,117 @@ public final class DevCommands {
 	private ChatFormatting parseColor(String rawColor) {
 		ChatFormatting color = ChatFormatting.getByName(rawColor.toLowerCase(Locale.ROOT));
 		return color != null && color.isColor() ? color : null;
+	}
+
+	// -------------------------------------------------------------------------
+	// Sell market commands
+	// -------------------------------------------------------------------------
+
+	private int sellInspectAll(CommandContext<CommandSourceStack> context) {
+		java.util.List<Item> items = sellMarketManager.getItemsWithVolume();
+		if (items.isEmpty()) {
+			context.getSource().sendSuccess(() -> Component.literal("[DEV] All sell prices are at base — no active market pressure.").withStyle(ChatFormatting.GREEN), false);
+			return Command.SINGLE_SUCCESS;
+		}
+		context.getSource().sendSuccess(() -> Component.literal("[DEV] Items with market pressure (" + items.size() + "):").withStyle(ChatFormatting.YELLOW), false);
+		for (Item item : items) {
+			int base = sellMarketManager.getBasePrice(item);
+			int current = sellMarketManager.getCurrentPrice(item);
+			long volume = sellMarketManager.getSoldVolume(item);
+			String name = sellItemName(item);
+			context.getSource().sendSuccess(() -> Component.literal("  " + name + ": ")
+				.append(Component.literal(current + " coins").withStyle(ChatFormatting.GOLD))
+				.append(Component.literal(" (base " + base + " | vol " + volume + ")").withStyle(ChatFormatting.GRAY)), false);
+		}
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private int sellInspectItem(CommandContext<CommandSourceStack> context) {
+		String itemName = StringArgumentType.getString(context, "item");
+		Item item = resolveItem(itemName);
+		if (item == null) {
+			context.getSource().sendFailure(Component.literal("Unknown item: " + itemName + ". Use the registry name, e.g. wheat or minecraft:wheat."));
+			return 0;
+		}
+		if (!sellMarketManager.isSellable(item)) {
+			context.getSource().sendFailure(Component.literal(sellItemName(item) + " is not a sellable item."));
+			return 0;
+		}
+		int base = sellMarketManager.getBasePrice(item);
+		int current = sellMarketManager.getCurrentPrice(item);
+		long volume = sellMarketManager.getSoldVolume(item);
+		context.getSource().sendSuccess(() -> Component.literal("[DEV] ").withStyle(ChatFormatting.YELLOW)
+			.append(Component.literal(sellItemName(item)).withStyle(ChatFormatting.WHITE))
+			.append(Component.literal(" — base: " + base + " | current: " + current + " | sold vol: " + volume).withStyle(ChatFormatting.GRAY)), false);
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private int sellVolumeSet(CommandContext<CommandSourceStack> context) {
+		String itemName = StringArgumentType.getString(context, "item");
+		int amount = IntegerArgumentType.getInteger(context, "amount");
+		Item item = resolveItem(itemName);
+		if (item == null || !sellMarketManager.isSellable(item)) {
+			context.getSource().sendFailure(Component.literal("Unknown or unsellable item: " + itemName));
+			return 0;
+		}
+		sellMarketManager.setSoldVolume(context.getSource().getServer(), item, amount);
+		int newPrice = sellMarketManager.getCurrentPrice(item);
+		String name = sellItemName(item);
+		context.getSource().sendSuccess(() -> Component.literal("[DEV] Set sold volume of ").withStyle(ChatFormatting.YELLOW)
+			.append(Component.literal(name).withStyle(ChatFormatting.WHITE))
+			.append(Component.literal(" to " + amount + ". New price: "))
+			.append(Component.literal(newPrice + " coins").withStyle(ChatFormatting.GOLD))
+			.append(Component.literal(".")), true);
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private int sellVolumeReset(CommandContext<CommandSourceStack> context) {
+		String itemName = StringArgumentType.getString(context, "item");
+		Item item = resolveItem(itemName);
+		if (item == null || !sellMarketManager.isSellable(item)) {
+			context.getSource().sendFailure(Component.literal("Unknown or unsellable item: " + itemName));
+			return 0;
+		}
+		sellMarketManager.resetVolume(context.getSource().getServer(), item);
+		int basePrice = sellMarketManager.getBasePrice(item);
+		String name = sellItemName(item);
+		context.getSource().sendSuccess(() -> Component.literal("[DEV] Reset volume of ").withStyle(ChatFormatting.YELLOW)
+			.append(Component.literal(name).withStyle(ChatFormatting.WHITE))
+			.append(Component.literal(". Price restored to "))
+			.append(Component.literal(basePrice + " coins").withStyle(ChatFormatting.GOLD))
+			.append(Component.literal(".")), true);
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private int sellVolumeResetAll(CommandContext<CommandSourceStack> context) {
+		int count = sellMarketManager.resetAllVolumes(context.getSource().getServer());
+		context.getSource().sendSuccess(() -> Component.literal("[DEV] Reset all sold volumes (" + count + " item types). All prices restored to base.").withStyle(ChatFormatting.YELLOW), true);
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private int sellForceDecay(CommandContext<CommandSourceStack> context) {
+		sellMarketManager.forceDecay(context.getSource().getServer());
+		context.getSource().sendSuccess(() -> Component.literal("[DEV] Forced a market decay step. All volumes reduced by 5%.").withStyle(ChatFormatting.YELLOW), true);
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private Item resolveItem(String name) {
+		Identifier id = name.contains(":") ? Identifier.tryParse(name) : Identifier.withDefaultNamespace(name);
+		if (id == null || !BuiltInRegistries.ITEM.containsKey(id)) return null;
+		return BuiltInRegistries.ITEM.getValue(id);
+	}
+
+	private static String sellItemName(Item item) {
+		Identifier id = BuiltInRegistries.ITEM.getKey(item);
+		String[] parts = id.getPath().split("_");
+		StringBuilder sb = new StringBuilder();
+		for (String part : parts) {
+			if (!sb.isEmpty()) sb.append(' ');
+			if (!part.isEmpty()) {
+				sb.append(Character.toUpperCase(part.charAt(0)));
+				sb.append(part.substring(1));
+			}
+		}
+		return sb.toString();
 	}
 }
