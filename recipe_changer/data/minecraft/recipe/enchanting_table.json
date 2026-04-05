@@ -1,8 +1,9 @@
 {
-  "type": "minecraft:enchanting_table",
+  "type": "minecraft:crafting_shaped",
+  "show_notification": true,
   "category": "misc",
   "pattern": [
-    " d",
+    " d ",
     "cac",
     "aba"
   ],

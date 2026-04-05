@@ -1,0 +1,9 @@
+from pathlib import Path
+path = Path('src/main/java/zeitvertreib/economy/team/TeamManager.java')
+text = path.read_text(encoding='utf-8')
+old = """\t\t\t\tSet<UUID> blockedWithdrawals = new HashSet<>();\n\t\t\t\tif (savedTeam.blockedWithdrawals != null) {\n\t\t\t\t\tfor (String blocked : savedTeam.blockedWithdrawals) {\n\t\t\t\t\t\ttry {\n\t\t\t\t\t\t\tblockedWithdrawals.add(UUID.fromString(blocked));\n\t\t\t\t\t\t} catch (IllegalArgumentException ignored) {\n\t\t\t\t\t\t}\n\t\t\t\t\t}\n\t\t\t\t}\n\n\t\t\t\tTeamData team = new TeamData(\n\t\t\t\t\tnormalizedName,\n\t\t\t\t\tcolor.getName(),\n\t\t\t\t\tsavedTeam.leaderId,\n\t\t\t\t\tsavedTeam.members,\n\t\t\t\t\tsavedTeam.bankBalance,\n\t\t\t\t\tMath.max(1, savedTeam.level),\n\t\t\t\t\tcontributions,\n\t\t\t\t\tsavedTeam.withdrawalsBlockedForAll,\n\t\t\t\t\tblockedWithdrawals\n\t\t\t\t\tplayerTeams.putIfAbsent(memberId, team.name());\n"""
+new = """\t\t\t\tSet<UUID> blockedWithdrawals = new HashSet<>();\n\t\t\t\tif (savedTeam.blockedWithdrawals != null) {\n\t\t\t\t\tfor (String blocked : savedTeam.blockedWithdrawals) {\n\t\t\t\t\t\ttry {\n\t\t\t\t\t\t\tblockedWithdrawals.add(UUID.fromString(blocked));\n\t\t\t\t\t\t} catch (IllegalArgumentException ignored) {\n\t\t\t\t\t\t}\n\t\t\t\t\t}\n\t\t\t\t}\n\n\t\t\t\tTeamData team = new TeamData(\n\t\t\t\t\tnormalizedName,\n\t\t\t\t\tcolor.getName(),\n\t\t\t\t\tsavedTeam.leaderId,\n\t\t\t\t\tsavedTeam.members,\n\t\t\t\t\tsavedTeam.bankBalance,\n\t\t\t\t\tMath.max(1, savedTeam.level),\n\t\t\t\t\tcontributions,\n\t\t\t\t\tsavedTeam.withdrawalsBlockedForAll,\n\t\t\t\t\tblockedWithdrawals\n\t\t\t\t);\n\n\t\t\t\tteamsByName.put(team.name(), team);\n\t\t\t\tfor (UUID memberId : team.memberIds()) {\n\t\t\t\t\tplayerTeams.putIfAbsent(memberId, team.name());\n\t\t\t\t}\n"""
+if old not in text:
+    raise SystemExit('old block not found')
+path.write_text(text.replace(old, new), encoding='utf-8')
+print('patched')

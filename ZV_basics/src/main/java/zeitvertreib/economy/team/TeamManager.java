@@ -19,9 +19,11 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import zeitvertreib.economy.ZeitvertreibEconomy;
@@ -35,12 +37,14 @@ public final class TeamManager {
 	private final Map<String, TeamData> teamsByName = new HashMap<>();
 	private final Map<UUID, String> playerTeams = new HashMap<>();
 	private final Map<UUID, TeamInvite> pendingInvites = new HashMap<>();
+	private final Set<UUID> cheaterPlayerIds = new HashSet<>();
 	private boolean loaded;
 
 	public void reset() {
 		teamsByName.clear();
 		playerTeams.clear();
 		pendingInvites.clear();
+		cheaterPlayerIds.clear();
 		loaded = false;
 	}
 
@@ -58,6 +62,34 @@ public final class TeamManager {
 		ensureLoaded(server);
 		String teamName = playerTeams.get(playerId);
 		return teamName == null ? null : teamsByName.get(teamName);
+	}
+
+	public boolean isCheater(MinecraftServer server, UUID playerId) {
+		ensureLoaded(server);
+		return cheaterPlayerIds.contains(playerId);
+	}
+
+	public boolean addCheater(MinecraftServer server, UUID playerId) {
+		ensureLoaded(server);
+		boolean added = cheaterPlayerIds.add(playerId);
+		if (added) {
+			save(server);
+		}
+		return added;
+	}
+
+	public boolean removeCheater(MinecraftServer server, UUID playerId) {
+		ensureLoaded(server);
+		boolean removed = cheaterPlayerIds.remove(playerId);
+		if (removed) {
+			save(server);
+		}
+		return removed;
+	}
+
+	public Collection<UUID> getCheaters(MinecraftServer server) {
+		ensureLoaded(server);
+		return List.copyOf(cheaterPlayerIds);
 	}
 
 	public Collection<TeamData> getTeams(MinecraftServer server) {
@@ -324,10 +356,29 @@ public final class TeamManager {
 		syncDisplays(server);
 	}
 
-	public void depositToBank(MinecraftServer server, TeamData team, int amount) {
+	public boolean depositToBank(MinecraftServer server, TeamData team, int amount) {
 		ensureLoaded(server);
+		if (amount <= 0 || amount > team.maxBankCapacity() - team.bankBalance()) {
+			return false;
+		}
+
 		team.depositToBank(amount);
 		save(server);
+		return true;
+	}
+
+	public boolean depositToBank(MinecraftServer server, TeamData team, int amount, UUID playerId) {
+		ensureLoaded(server);
+		if (amount <= 0 || amount > team.maxBankCapacity() - team.bankBalance()) {
+			return false;
+		}
+
+		team.depositToBank(amount);
+		if (playerId != null) {
+			team.adjustContribution(playerId, amount);
+		}
+		save(server);
+		return true;
 	}
 
 	public boolean withdrawFromBank(MinecraftServer server, TeamData team, int amount) {
@@ -337,6 +388,52 @@ public final class TeamManager {
 		}
 
 		team.withdrawFromBank(amount);
+		save(server);
+		return true;
+	}
+
+	public boolean withdrawFromBank(MinecraftServer server, TeamData team, int amount, UUID playerId) {
+		ensureLoaded(server);
+		long now = System.currentTimeMillis();
+		if (team.isWithdrawalsRestricted(playerId) || !team.canWithdrawFromBank(playerId, amount, now)) {
+			return false;
+		}
+
+		team.withdrawFromBank(amount);
+		team.recordWithdrawalTime(playerId, now);
+		save(server);
+		return true;
+	}
+
+	public boolean setBankWithdrawLimit(MinecraftServer server, TeamData team, int percent, int minutes) {
+		ensureLoaded(server);
+		if (percent < 1 || percent > 100 || minutes < 1) {
+			return false;
+		}
+		team.setWithdrawalLimitPercent(percent);
+		team.setWithdrawalLimitIntervalMinutes(minutes);
+		save(server);
+		return true;
+	}
+
+	public boolean setWithdrawalsBlockedForAll(MinecraftServer server, TeamData team, boolean blocked) {
+		ensureLoaded(server);
+		team.setWithdrawalsBlockedForAll(blocked);
+		save(server);
+		return true;
+	}
+
+	public boolean setBlockedWithdrawalForPlayer(MinecraftServer server, TeamData team, UUID playerId, boolean blocked) {
+		ensureLoaded(server);
+		if (playerId == null || team.leaderId().equals(playerId) || !team.hasMember(playerId)) {
+			return false;
+		}
+
+		if (blocked) {
+			team.blockWithdrawalForPlayer(playerId);
+		} else {
+			team.unblockWithdrawalForPlayer(playerId);
+		}
 		save(server);
 		return true;
 	}
@@ -378,16 +475,84 @@ public final class TeamManager {
 		ServerScoreboard scoreboard = server.getScoreboard();
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
 			TeamData team = getTeamForPlayer(server, player.getUUID());
-			if (team == null) {
+			boolean cheater = isCheater(server, player.getUUID());
+			if (team == null && !cheater) {
 				continue;
 			}
 
 			PlayerTeam displayTeam = scoreboard.addPlayerTeam(getDisplayTeamName(player.getUUID()));
-			displayTeam.setDisplayName(Component.literal(team.name()));
+			displayTeam.setDisplayName(Component.literal(team != null ? team.name() : ""));
 			displayTeam.setColor(ChatFormatting.WHITE);
-			displayTeam.setPlayerPrefix(buildPlayerPrefix(team, player.getUUID().equals(team.leaderId())));
+			displayTeam.setPlayerPrefix(team != null ? buildPlayerPrefix(team, player.getUUID().equals(team.leaderId())) : Component.empty());
+			if (cheater) {
+				displayTeam.setPlayerSuffix(Component.literal("[cheater]").withStyle(ChatFormatting.RED));
+			}
 			scoreboard.addPlayerToTeam(player.getScoreboardName(), displayTeam);
 		}
+	}
+
+	public void syncDisplayForPlayer(MinecraftServer server, ServerPlayer player) {
+		if (!canSyncDisplays(server) || player == null) {
+			return;
+		}
+
+		clearDisplayForPlayer(server, player);
+		TeamData team = getTeamForPlayer(server, player.getUUID());
+		boolean cheater = isCheater(server, player.getUUID());
+		if (team == null && !cheater) {
+			return;
+		}
+
+		ServerScoreboard scoreboard = server.getScoreboard();
+		PlayerTeam displayTeam = scoreboard.addPlayerTeam(getDisplayTeamName(player.getUUID()));
+		displayTeam.setDisplayName(Component.literal(team != null ? team.name() : ""));
+		displayTeam.setColor(ChatFormatting.WHITE);
+		displayTeam.setPlayerPrefix(team != null ? buildPlayerPrefix(team, player.getUUID().equals(team.leaderId())) : Component.empty());
+		if (cheater) {
+			displayTeam.setPlayerSuffix(Component.literal("[cheater]").withStyle(ChatFormatting.RED));
+		}
+		scoreboard.addPlayerToTeam(player.getScoreboardName(), displayTeam);
+	}
+
+	public boolean renameTeam(MinecraftServer server, TeamData team, String rawName) {
+		ensureLoaded(server);
+		if (team == null || rawName == null || rawName.isBlank()) {
+			return false;
+		}
+
+		String normalizedName = normalizeTeamName(rawName);
+		if (normalizedName.equals(team.name()) || teamsByName.containsKey(normalizedName)) {
+			return false;
+		}
+
+		String oldName = team.name();
+		team.setName(normalizedName);
+		teamsByName.remove(oldName);
+		teamsByName.put(normalizedName, team);
+		for (UUID playerId : team.memberIds()) {
+			playerTeams.put(playerId, normalizedName);
+		}
+		for (Map.Entry<UUID, TeamInvite> entry : pendingInvites.entrySet()) {
+			TeamInvite invite = entry.getValue();
+			if (invite.teamName().equals(oldName)) {
+				entry.setValue(new TeamInvite(normalizedName, invite.inviterName(), invite.expiresAtMillis()));
+			}
+		}
+		save(server);
+		syncDisplays(server);
+		return true;
+	}
+
+	public boolean recolorTeam(MinecraftServer server, TeamData team, ChatFormatting color) {
+		ensureLoaded(server);
+		if (team == null || color == null || !color.isColor()) {
+			return false;
+		}
+
+		team.setColorName(color.getName());
+		save(server);
+		syncDisplays(server);
+		return true;
 	}
 
 	public void clearDisplayForPlayer(MinecraftServer server, ServerPlayer player) {
@@ -414,6 +579,7 @@ public final class TeamManager {
 		teamsByName.clear();
 		playerTeams.clear();
 		pendingInvites.clear();
+		cheaterPlayerIds.clear();
 
 		Path filePath = getFilePath(server);
 		if (!Files.exists(filePath)) {
@@ -425,30 +591,78 @@ public final class TeamManager {
 		try {
 			String rawJson = Files.readString(filePath, StandardCharsets.UTF_8);
 			SavedData savedData = GSON.fromJson(rawJson, SavedData.class);
-			if (savedData != null && savedData.teams != null) {
-				for (SavedTeam savedTeam : savedData.teams) {
-					if (savedTeam == null || savedTeam.name == null || savedTeam.colorName == null || savedTeam.leaderId == null) {
-						continue;
+			if (savedData != null) {
+				if (savedData.cheaterIds != null) {
+					for (String cheaterId : savedData.cheaterIds) {
+						try {
+							cheaterPlayerIds.add(UUID.fromString(cheaterId));
+						} catch (IllegalArgumentException ignored) {
+						}
 					}
+				}
+				if (savedData.teams != null) {
+					for (SavedTeam savedTeam : savedData.teams) {
+						if (savedTeam == null || savedTeam.name == null || savedTeam.colorName == null || savedTeam.leaderId == null) {
+							continue;
+						}
 
-					String normalizedName = normalizeTeamName(savedTeam.name);
-					ChatFormatting color = ChatFormatting.getByName(savedTeam.colorName);
-					if (normalizedName.isBlank() || normalizedName.length() > 5 || color == null || !color.isColor()) {
-						continue;
-					}
+						String normalizedName = normalizeTeamName(savedTeam.name);
+						ChatFormatting color = ChatFormatting.getByName(savedTeam.colorName);
+						if (normalizedName.isBlank() || normalizedName.length() > 5 || color == null || !color.isColor()) {
+							continue;
+						}
 
-					TeamData team = new TeamData(
-						normalizedName,
-						color.getName(),
-						savedTeam.leaderId,
-						savedTeam.members,
-						savedTeam.bankBalance,
-						Math.max(1, savedTeam.level)
-					);
+						Map<UUID, Integer> contributions = new HashMap<>();
+						if (savedTeam.contributions != null) {
+							for (Map.Entry<String, Integer> contributionEntry : savedTeam.contributions.entrySet()) {
+								try {
+									UUID playerId = UUID.fromString(contributionEntry.getKey());
+									contributions.put(playerId, contributionEntry.getValue());
+								} catch (IllegalArgumentException ignored) {
+								}
+							}
+						}
 
-					teamsByName.put(team.name(), team);
-					for (UUID memberId : team.memberIds()) {
-						playerTeams.putIfAbsent(memberId, team.name());
+						Set<UUID> blockedWithdrawals = new HashSet<>();
+						if (savedTeam.blockedWithdrawals != null) {
+							for (String blocked : savedTeam.blockedWithdrawals) {
+								try {
+									blockedWithdrawals.add(UUID.fromString(blocked));
+								} catch (IllegalArgumentException ignored) {
+								}
+							}
+						}
+
+						Map<UUID, Long> lastWithdrawalTimes = new HashMap<>();
+						if (savedTeam.lastWithdrawalTimestamps != null) {
+							for (Map.Entry<String, Long> lastEntry : savedTeam.lastWithdrawalTimestamps.entrySet()) {
+								try {
+									UUID playerId = UUID.fromString(lastEntry.getKey());
+									lastWithdrawalTimes.put(playerId, Math.max(0L, lastEntry.getValue()));
+								} catch (IllegalArgumentException ignored) {
+								}
+							}
+						}
+
+						TeamData team = new TeamData(
+							normalizedName,
+							color.getName(),
+							savedTeam.leaderId,
+							savedTeam.members,
+							savedTeam.bankBalance,
+							Math.max(1, savedTeam.level),
+							contributions,
+							savedTeam.withdrawalsBlockedForAll,
+							blockedWithdrawals,
+							savedTeam.withdrawalLimitPercent,
+							savedTeam.withdrawalLimitIntervalMinutes * 60_000L,
+							lastWithdrawalTimes
+						);
+
+						teamsByName.put(team.name(), team);
+						for (UUID memberId : team.memberIds()) {
+							playerTeams.putIfAbsent(memberId, team.name());
+						}
 					}
 				}
 			}
@@ -469,7 +683,25 @@ public final class TeamManager {
 			savedTeam.bankBalance = team.bankBalance();
 			savedTeam.level = team.level();
 			savedTeam.members = new ArrayList<>(team.memberIds());
+			savedTeam.withdrawalsBlockedForAll = team.areWithdrawalsBlockedForAll();
+			savedTeam.blockedWithdrawals = new ArrayList<>();
+			for (UUID blocked : team.blockedWithdrawalMembers()) {
+				savedTeam.blockedWithdrawals.add(blocked.toString());
+			}
+			savedTeam.withdrawalLimitPercent = team.withdrawalLimitPercent();
+			savedTeam.withdrawalLimitIntervalMinutes = team.withdrawalLimitIntervalMinutes();
+			savedTeam.lastWithdrawalTimestamps = new HashMap<>();
+			for (Map.Entry<UUID, Long> lastEntry : team.lastWithdrawalTimes().entrySet()) {
+				savedTeam.lastWithdrawalTimestamps.put(lastEntry.getKey().toString(), lastEntry.getValue());
+			}
+			savedTeam.contributions = new HashMap<>();
+			for (Map.Entry<UUID, Integer> contributionEntry : team.contributions().entrySet()) {
+				savedTeam.contributions.put(contributionEntry.getKey().toString(), contributionEntry.getValue());
+			}
 			savedData.teams.add(savedTeam);
+		}
+		for (UUID cheaterId : cheaterPlayerIds) {
+			savedData.cheaterIds.add(cheaterId.toString());
 		}
 
 		Path filePath = getFilePath(server);
@@ -564,6 +796,7 @@ public final class TeamManager {
 
 	private static final class SavedData {
 		private List<SavedTeam> teams = new ArrayList<>();
+		private List<String> cheaterIds = new ArrayList<>();
 	}
 
 	private static final class SavedTeam {
@@ -573,6 +806,12 @@ public final class TeamManager {
 		private int level = 1;
 		private int bankBalance;
 		private List<UUID> members = new ArrayList<>();
+		private boolean withdrawalsBlockedForAll;
+		private List<String> blockedWithdrawals = new ArrayList<>();
+		private int withdrawalLimitPercent = 33;
+		private int withdrawalLimitIntervalMinutes = 5;
+		private Map<String, Long> lastWithdrawalTimestamps = new HashMap<>();
+		private Map<String, Integer> contributions = new HashMap<>();
 	}
 
 	public record TeamRankingEntry(TeamData team, double score, double bankRatio, double levelRatio) {

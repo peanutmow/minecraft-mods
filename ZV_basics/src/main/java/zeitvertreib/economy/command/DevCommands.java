@@ -103,6 +103,13 @@ public final class DevCommands {
 				.then(Commands.literal("reset")
 					.then(Commands.argument("player", EntityArgument.player())
 						.executes(this::resetPvpState))))
+			.then(Commands.literal("cheater")
+				.then(Commands.literal("add")
+					.then(Commands.argument("player", EntityArgument.player())
+						.executes(this::addCheaterTag)))
+				.then(Commands.literal("remove")
+					.then(Commands.argument("player", EntityArgument.player())
+						.executes(this::removeCheaterTag))))
 			.then(Commands.literal("team")
 				.then(Commands.literal("list")
 					.executes(this::listTeams))
@@ -174,6 +181,8 @@ public final class DevCommands {
 		context.getSource().sendSuccess(() -> Component.literal("/zvdev trade clearall - Cancel every active trade."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zvdev pvp info <player> - Inspect a player's PvP state and cooldown."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zvdev pvp reset <player> - Reset a player to default PvP enabled with no cooldown."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/zvdev cheater add <player> - Mark a player as a cheater with [cheater] tag."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/zvdev cheater remove <player> - Remove the cheater badge from a player."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zvdev team list|info <team> - Inspect all teams or one team."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zvdev team create <player> <name> <color> - Force-create a team for a player."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zvdev team join <team> <player> - Force-move a player into a team."), false);
@@ -221,6 +230,38 @@ public final class DevCommands {
 			.append(Component.literal(previousState.remainingCooldownMillis() > 0L ? formatDuration(previousState.remainingCooldownMillis()) : "ready").withStyle(previousState.remainingCooldownMillis() > 0L ? ChatFormatting.YELLOW : ChatFormatting.GREEN))
 			.append(Component.literal(".")), true);
 		target.sendSystemMessage(Component.literal("Your PvP setting was reset to the default state by an admin.").withStyle(ChatFormatting.YELLOW));
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private int addCheaterTag(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+		ServerPlayer target = EntityArgument.getPlayer(context, "player");
+		MinecraftServer server = context.getSource().getServer();
+		if (!teamManager.addCheater(server, target.getUUID())) {
+			context.getSource().sendFailure(Component.literal("That player is already marked as a cheater."));
+			return 0;
+		}
+		teamManager.syncDisplayForPlayer(server, target);
+		context.getSource().sendSuccess(() -> Component.literal("[DEV] Marked ").withStyle(ChatFormatting.YELLOW)
+			.append(Component.literal(target.getName().getString()).withStyle(ChatFormatting.AQUA))
+			.append(Component.literal(" as "))
+			.append(Component.literal("[cheater]").withStyle(ChatFormatting.RED))
+			.append(Component.literal(".")), true);
+		target.sendSystemMessage(Component.literal("You have been marked as a cheater.").withStyle(ChatFormatting.RED));
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private int removeCheaterTag(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+		ServerPlayer target = EntityArgument.getPlayer(context, "player");
+		MinecraftServer server = context.getSource().getServer();
+		if (!teamManager.removeCheater(server, target.getUUID())) {
+			context.getSource().sendFailure(Component.literal("That player is not marked as a cheater."));
+			return 0;
+		}
+		teamManager.syncDisplayForPlayer(server, target);
+		context.getSource().sendSuccess(() -> Component.literal("[DEV] Removed ").withStyle(ChatFormatting.YELLOW)
+			.append(Component.literal(target.getName().getString()).withStyle(ChatFormatting.AQUA))
+			.append(Component.literal(" cheater status.")), true);
+		target.sendSystemMessage(Component.literal("Your cheater tag has been removed.").withStyle(ChatFormatting.GREEN));
 		return Command.SINGLE_SUCCESS;
 	}
 
@@ -362,15 +403,17 @@ public final class DevCommands {
 
 		context.getSource().sendSuccess(() -> Component.literal("--- Teams ---").withStyle(ChatFormatting.YELLOW), false);
 		for (TeamData team : teams) {
-			String line = String.format(Locale.ROOT, "%s leader=%s lvl=%d members=%d/%d bank=%d %s",
-				team.name(),
-				team.leaderId(),
-				team.level(),
-				team.memberIds().size(),
-				team.maxMembers(),
-				team.bankBalance(),
-				CURRENCY_LABEL);
-			context.getSource().sendSuccess(() -> Component.literal(line).withStyle(team.color()), false);
+			MutableComponent line = Component.literal(team.name()).withStyle(team.color())
+				.append(Component.literal(" | leader=").withStyle(ChatFormatting.GRAY))
+				.append(Component.literal(team.leaderId().toString()).withStyle(team.color()))
+				.append(Component.literal(" | lvl=").withStyle(ChatFormatting.GRAY))
+				.append(Component.literal(String.valueOf(team.level())).withStyle(team.color()))
+				.append(Component.literal(" | members=").withStyle(ChatFormatting.GRAY))
+				.append(Component.literal(team.memberIds().size() + "/" + team.maxMembers()).withStyle(team.color()))
+				.append(Component.literal(" | bank=").withStyle(ChatFormatting.GRAY))
+				.append(Component.literal(String.valueOf(team.bankBalance())).withStyle(team.color()))
+				.append(Component.literal(" " + CURRENCY_LABEL).withStyle(team.color()));
+			context.getSource().sendSuccess(() -> line, false);
 		}
 		return Command.SINGLE_SUCCESS;
 	}
@@ -525,7 +568,10 @@ public final class DevCommands {
 		}
 
 		int amount = IntegerArgumentType.getInteger(context, "amount");
-		teamManager.depositToBank(context.getSource().getServer(), team, amount);
+		if (!teamManager.depositToBank(context.getSource().getServer(), team, amount)) {
+			context.getSource().sendFailure(Component.literal("[DEV] Cannot deposit, would exceed team bank cap (" + team.maxBankCapacity() + ")."));
+			return 0;
+		}
 		context.getSource().sendSuccess(() -> Component.literal("[DEV] Updated bank of ").withStyle(ChatFormatting.YELLOW)
 			.append(teamManager.describeTeam(team))
 			.append(Component.literal(" to "))

@@ -146,7 +146,8 @@ public final class TpaCommands {
 			destination = requester;
 		}
 
-		if (tpaManager.hasPendingTeleport(teleportingPlayer.getUUID())) {
+		if (tpaManager.hasPendingTeleport(teleportingPlayer.getUUID())
+				|| zeitvertreib.economy.ZeitvertreibEconomy.HOME_MANAGER.hasPendingTeleport(teleportingPlayer.getUUID())) {
 			// Refund and block — the teleporting player already has a warmup running.
 			currencyManager.addBalance(context.getSource().getServer(), request.requesterId(), cost);
 			context.getSource().sendFailure(prefix().append(

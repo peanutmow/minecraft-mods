@@ -31,9 +31,11 @@ import zeitvertreib.economy.sell.SellMarketManager;
 public final class SellCommands {
 
     private static final int LIST_PAGE_SIZE = 15;
+    private static final long SELL_ALL_CONFIRM_MILLIS = 30_000L;
 
     private final CurrencyManager currencyManager;
     private final SellMarketManager sellMarketManager;
+    private final Map<java.util.UUID, Long> pendingSellAllConfirm = new java.util.HashMap<>();
 
     public SellCommands(CurrencyManager currencyManager, SellMarketManager sellMarketManager) {
         this.currencyManager = currencyManager;
@@ -44,7 +46,8 @@ public final class SellCommands {
         dispatcher.register(Commands.literal("sell")
             .executes(this::sellOne)
             .then(Commands.literal("all")
-                .executes(this::sellAll))
+                .executes(this::sellAll)
+                .then(Commands.literal("confirm").executes(this::sellAllConfirmed)))
             .then(Commands.literal("list")
                 .executes(ctx -> showList(ctx, 1))
                 .then(Commands.argument("page", IntegerArgumentType.integer(1))
@@ -67,6 +70,12 @@ public final class SellCommands {
 
     private int doSell(CommandContext<CommandSourceStack> context, int requested) throws CommandSyntaxException {
         ServerPlayer player = context.getSource().getPlayerOrException();
+
+        if (player.isCreative()) {
+            context.getSource().sendFailure(Component.literal("You cannot sell items in creative mode."));
+            return 0;
+        }
+
         ItemStack held = player.getMainHandItem();
 
         if (held.isEmpty()) {
@@ -103,60 +112,111 @@ public final class SellCommands {
 
     private int sellAll(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
         ServerPlayer player = context.getSource().getPlayerOrException();
+        java.util.UUID playerId = player.getUUID();
+        long now = System.currentTimeMillis();
+
+        Long pending = pendingSellAllConfirm.get(playerId);
+        if (pending == null || pending < now) {
+            pendingSellAllConfirm.put(playerId, now + SELL_ALL_CONFIRM_MILLIS);
+
+            context.getSource().sendSuccess(() -> Component.literal("Are you sure you want to sell all sellable items? ")
+                .append(Component.literal("[CONFIRM]")
+                    .withStyle(style -> style
+                        .withColor(ChatFormatting.GOLD)
+                        .withBold(true)
+                        .withClickEvent(new net.minecraft.network.chat.ClickEvent.RunCommand("/sell all confirm"))
+                        .withHoverEvent(new net.minecraft.network.chat.HoverEvent.ShowText(Component.literal("Click to confirm selling all items")))))
+                .append(Component.literal(" (expires in 30s)").withStyle(ChatFormatting.GRAY)), false);
+
+            return Command.SINGLE_SUCCESS;
+        }
+
+        // confirmed; remove pending marker and execute sell-all.
+        pendingSellAllConfirm.remove(playerId);
+        return executeSellAll(context);
+    }
+
+    private int sellAllConfirmed(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        ServerPlayer player = context.getSource().getPlayerOrException();
+        java.util.UUID playerId = player.getUUID();
+        long now = System.currentTimeMillis();
+        Long pending = pendingSellAllConfirm.get(playerId);
+        if (pending == null || pending < now) {
+            context.getSource().sendFailure(Component.literal("Sell-all confirmation expired. Use /sell all again first."));
+            return 0;
+        }
+        pendingSellAllConfirm.remove(playerId);
+        return executeSellAll(context);
+    }
+
+    private int executeSellAll(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        ServerPlayer player = context.getSource().getPlayerOrException();
         MinecraftServer server = context.getSource().getServer();
 
-        // item -> [totalQty, totalEarned]
-        Map<Item, int[]> sold = new LinkedHashMap<>();
-        int grandTotal = 0;
+        if (player.isCreative()) {
+            context.getSource().sendFailure(Component.literal("You cannot sell items in creative mode."));
+            return 0;
+        }
 
-        // Main inventory slots (hotbar + main)
+        // First pass: tally quantities per item type (don't modify anything yet).
+        Map<Item, Integer> quantities = new LinkedHashMap<>();
+        List<int[]> slotsToEmpty = new ArrayList<>(); // [slotIndex] for main inv
+
         for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
             ItemStack stack = player.getInventory().getItem(i);
             if (stack.isEmpty()) continue;
             Item item = stack.getItem();
             if (!sellMarketManager.isSellable(item)) continue;
-
-            int price = sellMarketManager.getCurrentPrice(item);
-            int qty = stack.getCount();
-            int earned = price * qty;
-            grandTotal += earned;
-            sold.computeIfAbsent(item, k -> new int[]{0, 0});
-            sold.get(item)[0] += qty;
-            sold.get(item)[1] += earned;
-            sellMarketManager.recordSale(server, item, qty);
-            player.getInventory().setItem(i, ItemStack.EMPTY);
+            quantities.merge(item, stack.getCount(), Integer::sum);
+            slotsToEmpty.add(new int[]{i});
         }
 
-        // Offhand slot
         ItemStack offhand = player.getOffhandItem();
-        if (!offhand.isEmpty() && sellMarketManager.isSellable(offhand.getItem())) {
-            Item item = offhand.getItem();
-            int price = sellMarketManager.getCurrentPrice(item);
-            int qty = offhand.getCount();
-            int earned = price * qty;
-            grandTotal += earned;
-            sold.computeIfAbsent(item, k -> new int[]{0, 0});
-            sold.get(item)[0] += qty;
-            sold.get(item)[1] += earned;
-            sellMarketManager.recordSale(server, item, qty);
-            player.setItemInHand(InteractionHand.OFF_HAND, ItemStack.EMPTY);
+        boolean sellOffhand = !offhand.isEmpty() && sellMarketManager.isSellable(offhand.getItem());
+        if (sellOffhand) {
+            quantities.merge(offhand.getItem(), offhand.getCount(), Integer::sum);
         }
 
-        if (grandTotal == 0) {
+        if (quantities.isEmpty()) {
             context.getSource().sendFailure(Component.literal("You have no sellable items."));
             return 0;
         }
 
+        // Second pass: snapshot a single price per item, compute earnings.
+        Map<Item, int[]> sold = new LinkedHashMap<>(); // item -> [qty, totalEarned, priceEach]
+        int grandTotal = 0;
+        for (Map.Entry<Item, Integer> entry : quantities.entrySet()) {
+            Item item = entry.getKey();
+            int qty = entry.getValue();
+            int price = sellMarketManager.getCurrentPrice(item);
+            int earned = price * qty;
+            grandTotal += earned;
+            sold.put(item, new int[]{qty, earned, price});
+        }
+
+        // Third pass: remove items, add balance, record sales.
+        for (int[] slot : slotsToEmpty) {
+            player.getInventory().setItem(slot[0], ItemStack.EMPTY);
+        }
+        if (sellOffhand) {
+            player.setItemInHand(InteractionHand.OFF_HAND, ItemStack.EMPTY);
+        }
+
         currencyManager.addBalance(server, player.getUUID(), grandTotal);
+        for (Map.Entry<Item, int[]> e : sold.entrySet()) {
+            sellMarketManager.recordSale(server, e.getKey(), e.getValue()[0]);
+        }
 
         context.getSource().sendSuccess(() -> Component.literal("--- Sold all items ---").withStyle(ChatFormatting.GOLD), false);
         for (Map.Entry<Item, int[]> e : sold.entrySet()) {
             String name = formatItemName(e.getKey());
             int qty = e.getValue()[0];
             int itemTotal = e.getValue()[1];
+            int priceEach = e.getValue()[2];
             context.getSource().sendSuccess(() -> Component.literal("  ")
                 .append(Component.literal(qty + "x " + name).withStyle(ChatFormatting.YELLOW))
-                .append(Component.literal(" \u2192 " + itemTotal + " coins").withStyle(ChatFormatting.GOLD)), false);
+                .append(Component.literal(" \u2192 " + itemTotal + " coins").withStyle(ChatFormatting.GOLD))
+                .append(Component.literal(" (" + priceEach + " each)").withStyle(ChatFormatting.GRAY)), false);
         }
         int gt = grandTotal;
         context.getSource().sendSuccess(() -> Component.literal("Total earned: ")

@@ -27,6 +27,14 @@ loom {
 
 }
 
+sourceSets {
+	main {
+		java {
+			srcDir "src/client/java"
+		}
+	}
+}
+
 dependencies {
 	// To change the versions see the gradle.properties file
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"

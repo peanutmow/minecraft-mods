@@ -22,8 +22,11 @@ import net.minecraft.world.item.ItemStack;
 
 import java.util.UUID;
 
+import zeitvertreib.economy.ZeitvertreibEconomy;
 import zeitvertreib.economy.config.EconomyConfig;
 import zeitvertreib.economy.currency.CurrencyManager;
+import zeitvertreib.economy.hud.StatsHudRenderer;
+import zeitvertreib.economy.network.StatsSync;
 import zeitvertreib.economy.pvp.PvpManager;
 import zeitvertreib.economy.trade.TradeOffer;
 import zeitvertreib.economy.trade.TradeOfferManager;
@@ -68,6 +71,11 @@ public final class EconomyCommands {
 					.executes(this::showTargetBalance))
 				.then(Commands.literal("rank")
 					.executes(this::showBalanceRank)))
+			.then(Commands.literal("menu")
+				.then(Commands.literal("show")
+					.executes(context -> setMenuVisibility(context, true)))
+				.then(Commands.literal("hide")
+					.executes(context -> setMenuVisibility(context, false))))
 			.then(Commands.literal("help")
 				.executes(this::showHelp)));
 	}
@@ -171,6 +179,16 @@ public final class EconomyCommands {
 		}
 
 		return 0;
+	}
+
+	private int setMenuVisibility(CommandContext<CommandSourceStack> context, boolean show) throws CommandSyntaxException {
+		ServerPlayer player = context.getSource().getPlayerOrException();
+		StatsSync.setHudEnabled(player, show);
+		StatsSync.sendToPlayer(context.getSource().getServer(), player, currencyManager, ZeitvertreibEconomy.TEAM_MANAGER);
+
+		context.getSource().sendSuccess(() -> Component.literal("HUD is now ")
+				.append(Component.literal(show ? "visible" : "hidden").withStyle(show ? ChatFormatting.GREEN : ChatFormatting.GRAY)), false);
+		return Command.SINGLE_SUCCESS;
 	}
 
 	private int acceptTrade(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
@@ -389,8 +407,10 @@ public final class EconomyCommands {
 		context.getSource().sendSuccess(() -> Component.literal("/zv team deny <team> - Deny a pending invite."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zv team kick <player> - Leader: remove a member."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zv team transfer <player> - Leader: transfer leadership."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/zv team modify rename <name> - Leader: rename your team."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/zv team modify color <color> - Leader: recolor your team."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zv team levelup - Leader: spend team bank funds to unlock another member slot."), false);
-		context.getSource().sendSuccess(() -> Component.literal("/zv team bank deposit <amt> - Deposit to team bank."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/zv team bank deposit <amt|all> - Deposit to team bank."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zv team bank withdraw <amt> - Withdraw from team bank."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zv team info - View team details (leader, level, slots, bank)."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/teams - List all teams."), false);
@@ -400,6 +420,19 @@ public final class EconomyCommands {
 		context.getSource().sendSuccess(() -> Component.literal("/sell <amount> - Sell multiple of the held item."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/sell all - Sell all sellable items across your inventory."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/sell list [page] - Browse current item sell prices."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/tpa <player> - Request to teleport to a player."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/tpahere <player> - Request a player to teleport to you."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/tpa accept / deny - Accept or deny a TPA request."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/sethome <name> - Set a home (costs 100 coins, default 1 slot, team levels unlock more)."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/home <name> - Teleport to a saved home."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/delhome <name> - Delete a home."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/homes - List your saved homes."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/bounty place <player> <amount> - Place a bounty on a player."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/bounty list - View top bounties."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/bounty check [player] - Check a player's bounty."), false);
+		context.getSource().sendSuccess(() -> Component.literal("/tc <message> - Send a message to your team."), false);
+		context.getSource().sendSuccess(() -> Component.literal("Daily login bonus: auto-claimed on join (streak multiplier up to 10 days)."), false);
+		context.getSource().sendSuccess(() -> Component.literal("Mob kills reward coins (shown on action bar)."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zv help - Show this help message."), false);
 		context.getSource().sendSuccess(() -> Component.literal("/zvdev help - OP-only developer and debugging commands."), false);
 		return Command.SINGLE_SUCCESS;

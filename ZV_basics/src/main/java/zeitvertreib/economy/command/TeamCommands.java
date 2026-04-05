@@ -7,6 +7,8 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.mojang.brigadier.suggestion.Suggestions;
+import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandBuildContext;
 import net.minecraft.commands.CommandSourceStack;
@@ -16,6 +18,7 @@ import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.util.ArrayList;
@@ -23,6 +26,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 import zeitvertreib.economy.currency.CurrencyManager;
 import zeitvertreib.economy.team.TeamData;
@@ -43,7 +47,11 @@ public final class TeamCommands {
 	public void register(CommandDispatcher<CommandSourceStack> dispatcher, CommandBuildContext registryAccess, Commands.CommandSelection environment) {
 		dispatcher.register(Commands.literal("zv")
 			.then(buildTeamCommandRoot()));
+		dispatcher.register(buildBankCommandRoot());
 		dispatcher.register(buildTeamsCommandRoot());
+		dispatcher.register(Commands.literal("tc")
+			.then(Commands.argument("message", StringArgumentType.greedyString())
+				.executes(this::teamChat)));
 	}
 
 	private LiteralArgumentBuilder<CommandSourceStack> buildTeamCommandRoot() {
@@ -71,14 +79,40 @@ public final class TeamCommands {
 			.then(Commands.literal("transfer")
 				.then(Commands.argument("player", EntityArgument.player())
 					.executes(this::transferLeadership)))
+			.then(Commands.literal("modify")
+				.then(Commands.literal("rename")
+					.then(Commands.argument("name", StringArgumentType.word())
+						.executes(this::renameTeam)))
+				.then(Commands.literal("color")
+					.then(Commands.argument("color", StringArgumentType.word())
+						.executes(this::recolorTeam))))
 			.then(Commands.literal("bank")
-				.then(Commands.literal("deposit")
-					.then(Commands.argument("amount", IntegerArgumentType.integer(1))
+				.then(Commands.literal("deposit")						.then(Commands.literal("all")
+							.executes(this::depositAllToBank))					.then(Commands.argument("amount", IntegerArgumentType.integer(1))
 						.executes(this::depositToBank)))
 				.then(Commands.literal("withdraw")
 					.then(Commands.argument("amount", IntegerArgumentType.integer(1))
-						.executes(this::withdrawFromBank))))
-			.then(Commands.literal("levelup")
+						.executes(this::withdrawFromBank)))
+				.then(Commands.literal("limit")
+					.then(Commands.argument("percentage", IntegerArgumentType.integer(1, 100))
+						.suggests(this::suggestLimitPercent)
+						.then(Commands.argument("minutes", IntegerArgumentType.integer(1))
+							.suggests(this::suggestLimitMinutes)
+									.executes(this::setBankLimit))))
+				.then(Commands.literal("block")
+					.then(Commands.literal("withdraw")
+						.then(Commands.literal("all")
+							.executes(this::blockWithdrawalsAll))
+						.then(Commands.argument("player", EntityArgument.player())
+							.executes(this::blockWithdrawalsPlayer))))
+				.then(Commands.literal("unblock")
+					.then(Commands.literal("withdraw")
+						.then(Commands.literal("all")
+							.executes(this::unblockWithdrawalsAll))
+						.then(Commands.argument("player", EntityArgument.player())
+							.executes(this::unblockWithdrawalsPlayer))))
+						)
+		.then(Commands.literal("levelup")
 				.executes(this::levelUpTeam))
 			.then(Commands.literal("list")
 				.executes(this::showTeamsList))
@@ -93,19 +127,40 @@ public final class TeamCommands {
 				.executes(this::showRankedTeams));
 	}
 
+	private LiteralArgumentBuilder<CommandSourceStack> buildBankCommandRoot() {
+		return Commands.literal("bank")
+			.then(Commands.literal("block")
+				.then(Commands.literal("withdraw")
+					.then(Commands.literal("all")
+						.executes(this::blockWithdrawalsAll))
+					.then(Commands.argument("player", EntityArgument.player())
+						.executes(this::blockWithdrawalsPlayer))))
+			.then(Commands.literal("unblock")
+				.then(Commands.literal("withdraw")
+					.then(Commands.literal("all")
+						.executes(this::unblockWithdrawalsAll))
+					.then(Commands.argument("player", EntityArgument.player())
+						.executes(this::unblockWithdrawalsPlayer))))
+			.then(Commands.literal("deposit")
+				.then(Commands.literal("all")
+					.executes(this::depositAllToBank))
+				.then(Commands.argument("amount", IntegerArgumentType.integer(1))
+					.executes(this::depositToBank)))
+			.then(Commands.literal("withdraw")
+				.then(Commands.argument("amount", IntegerArgumentType.integer(1))
+					.executes(this::withdrawFromBank)))
+			.then(Commands.literal("limit")
+				.then(Commands.argument("percentage", IntegerArgumentType.integer(1, 100))
+					.suggests(this::suggestLimitPercent)
+					.then(Commands.argument("minutes", IntegerArgumentType.integer(1))
+						.suggests(this::suggestLimitMinutes)
+						.executes(this::setBankLimit))))
+		;
+	}
+
 	private int createTeam(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
 		ServerPlayer player = context.getSource().getPlayerOrException();
-		if (teamManager.getTeamForPlayer(context.getSource().getServer(), player.getUUID()) != null) {
-			context.getSource().sendFailure(Component.literal("You are already in a team."));
-			return 0;
-		}
-
 		String rawName = StringArgumentType.getString(context, "name");
-		if (!rawName.matches("(?i)[a-z]{1,5}")) {
-			context.getSource().sendFailure(Component.literal("Team names must be letters only and 5 characters max."));
-			return 0;
-		}
-
 		ChatFormatting color = parseColor(StringArgumentType.getString(context, "color"));
 		if (color == null) {
 			context.getSource().sendFailure(Component.literal("Invalid team color. Use a vanilla text color, e.g. " + listSupportedColors() + "."));
@@ -269,6 +324,61 @@ public final class TeamCommands {
 		return Command.SINGLE_SUCCESS;
 	}
 
+	private int renameTeam(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+		ServerPlayer leader = context.getSource().getPlayerOrException();
+		TeamData team = requireLeaderTeam(context, leader);
+		if (team == null) {
+			return 0;
+		}
+
+		String rawName = StringArgumentType.getString(context, "name");
+		if (!rawName.matches("(?i)[a-z]{1,5}")) {
+			context.getSource().sendFailure(Component.literal("Team names must be letters only and 5 characters max."));
+			return 0;
+		}
+
+		String normalizedName = TeamManager.normalizeTeamName(rawName);
+		if (normalizedName.equals(team.name())) {
+			context.getSource().sendSuccess(() -> Component.literal("Your team name is already " + team.name() + "."), false);
+			return Command.SINGLE_SUCCESS;
+		}
+
+		if (teamManager.getTeam(context.getSource().getServer(), normalizedName) != null) {
+			context.getSource().sendFailure(Component.literal("That team name is already taken."));
+			return 0;
+		}
+
+		if (!teamManager.renameTeam(context.getSource().getServer(), team, rawName)) {
+			context.getSource().sendFailure(Component.literal("Unable to rename the team. Please try again."));
+			return 0;
+		}
+
+		context.getSource().sendSuccess(() -> Component.literal("Team renamed to ").append(Component.literal(team.name()).withStyle(team.color())), false);
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private int recolorTeam(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+		ServerPlayer leader = context.getSource().getPlayerOrException();
+		TeamData team = requireLeaderTeam(context, leader);
+		if (team == null) {
+			return 0;
+		}
+
+		ChatFormatting color = parseColor(StringArgumentType.getString(context, "color"));
+		if (color == null) {
+			context.getSource().sendFailure(Component.literal("Invalid team color. Use a vanilla text color, e.g. " + listSupportedColors() + "."));
+			return 0;
+		}
+
+		if (!teamManager.recolorTeam(context.getSource().getServer(), team, color)) {
+			context.getSource().sendFailure(Component.literal("Unable to recolor the team. Please try again."));
+			return 0;
+		}
+
+		context.getSource().sendSuccess(() -> Component.literal("Team recolored to ").append(Component.literal(color.getName()).withStyle(color)), false);
+		return Command.SINGLE_SUCCESS;
+	}
+
 	private int depositToBank(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
 		ServerPlayer player = context.getSource().getPlayerOrException();
 		TeamData team = requirePlayerTeam(context, player);
@@ -276,21 +386,84 @@ public final class TeamCommands {
 			return 0;
 		}
 
-		int amount = IntegerArgumentType.getInteger(context, "amount");
-		if (!currencyManager.withdraw(context.getSource().getServer(), player.getUUID(), amount)) {
+		int requestedAmount = IntegerArgumentType.getInteger(context, "amount");
+		int capacityRemaining = team.maxBankCapacity() - team.bankBalance();
+		if (capacityRemaining <= 0) {
+			context.getSource().sendFailure(Component.literal("Your team bank is already full."));
+			return 0;
+		}
+
+		int depositAmount = Math.min(requestedAmount, capacityRemaining);
+		if (!currencyManager.withdraw(context.getSource().getServer(), player.getUUID(), depositAmount)) {
 			context.getSource().sendFailure(Component.literal("You do not have enough coins to deposit that amount."));
 			return 0;
 		}
 
-		teamManager.depositToBank(context.getSource().getServer(), team, amount);
+		if (!teamManager.depositToBank(context.getSource().getServer(), team, depositAmount, player.getUUID())) {
+			context.getSource().sendFailure(Component.literal("Team bank deposit would exceed your level limit (max ")
+				.append(Component.literal(String.valueOf(team.maxBankCapacity())).withStyle(ChatFormatting.GOLD))
+				.append(Component.literal(").")));
+			return 0;
+		}
+		notifyLeaderOfBankTransfer(context.getSource().getServer(), team, player, "deposited", depositAmount);
+
 		MutableComponent response = Component.literal("Deposited ")
-			.append(formatCurrency(amount))
-			.append(Component.literal(" into team bank. New team bank balance: "))
+			.append(formatCurrency(depositAmount));
+		if (depositAmount < requestedAmount) {
+			response.append(Component.literal(" of your requested "))
+				.append(formatCurrency(requestedAmount));
+		}
+		response.append(Component.literal(" into team bank. New team bank balance: "))
 			.append(formatCurrency(team.bankBalance()))
+			.append(Component.literal(". Max is "))
+			.append(formatCurrency(team.maxBankCapacity()))
 			.append(Component.literal("."));
 		context.getSource().sendSuccess(() -> response, false);
 		return Command.SINGLE_SUCCESS;
 	}
+
+	private int depositAllToBank(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+		ServerPlayer player = context.getSource().getPlayerOrException();
+		TeamData team = requirePlayerTeam(context, player);
+		if (team == null) {
+			return 0;
+		}
+
+		int capacityRemaining = team.maxBankCapacity() - team.bankBalance();
+		if (capacityRemaining <= 0) {
+			context.getSource().sendFailure(Component.literal("Your team bank is already full."));
+			return 0;
+		}
+
+		int playerBalance = currencyManager.getBalance(context.getSource().getServer(), player.getUUID());
+		if (playerBalance <= 0) {
+			context.getSource().sendFailure(Component.literal("You have no coins to deposit."));
+			return 0;
+		}
+
+		int depositAmount = Math.min(playerBalance, capacityRemaining);
+		if (!currencyManager.withdraw(context.getSource().getServer(), player.getUUID(), depositAmount)) {
+			context.getSource().sendFailure(Component.literal("Unable to withdraw coins for deposit."));
+			return 0;
+		}
+
+		if (!teamManager.depositToBank(context.getSource().getServer(), team, depositAmount, player.getUUID())) {
+			currencyManager.addBalance(context.getSource().getServer(), player.getUUID(), depositAmount);
+			context.getSource().sendFailure(Component.literal("Team bank deposit failed. Please try again."));
+			return 0;
+		}
+
+		notifyLeaderOfBankTransfer(context.getSource().getServer(), team, player, "deposited", depositAmount);
+		MutableComponent response = Component.literal("Deposited ")
+			.append(formatCurrency(depositAmount))
+			.append(Component.literal(" into team bank. New team bank balance: "))
+			.append(formatCurrency(team.bankBalance()))
+			.append(Component.literal(". Max is "))
+			.append(formatCurrency(team.maxBankCapacity()))
+			.append(Component.literal("."));
+		context.getSource().sendSuccess(() -> response, false);
+		return Command.SINGLE_SUCCESS;
+}
 
 	private int levelUpTeam(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
 		ServerPlayer leader = context.getSource().getPlayerOrException();
@@ -308,6 +481,8 @@ public final class TeamCommands {
 			return 0;
 		}
 
+		notifyTeamUpgrade(context.getSource().getServer(), team);
+
 		MutableComponent response = Component.literal("Upgraded ")
 			.append(teamManager.describeTeam(team))
 			.append(Component.literal(" to level " + team.level() + ". Member slots: "))
@@ -321,6 +496,22 @@ public final class TeamCommands {
 		return Command.SINGLE_SUCCESS;
 	}
 
+	private void notifyTeamUpgrade(MinecraftServer server, TeamData team) {
+		for (UUID memberId : team.memberIds()) {
+			ServerPlayer member = server.getPlayerList().getPlayer(memberId);
+			if (member == null) {
+				continue;
+			}
+
+			member.sendSystemMessage(Component.literal("Your team has been upgraded!").withStyle(ChatFormatting.GOLD)
+				.append(Component.literal(" New level: " + team.level()).withStyle(ChatFormatting.GRAY))
+				.append(Component.literal(". Member slots: " ).withStyle(ChatFormatting.GRAY))
+				.append(Component.literal(String.valueOf(team.maxMembers())).withStyle(team.color()))
+				.append(Component.literal(". Bank capacity: " ).withStyle(ChatFormatting.GRAY))
+				.append(formatCurrency(team.maxBankCapacity())));
+		}
+	}
+
 	private int withdrawFromBank(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
 		ServerPlayer player = context.getSource().getPlayerOrException();
 		TeamData team = requirePlayerTeam(context, player);
@@ -329,11 +520,34 @@ public final class TeamCommands {
 		}
 
 		int amount = IntegerArgumentType.getInteger(context, "amount");
-		if (!teamManager.withdrawFromBank(context.getSource().getServer(), team, amount)) {
+		long now = System.currentTimeMillis();
+		if (team.isWithdrawalsRestricted(player.getUUID())) {
+			context.getSource().sendFailure(Component.literal("Team withdrawals are currently blocked for you."));
+			return 0;
+		}
+		long cooldown = team.withdrawCooldownRemaining(player.getUUID(), now);
+		int limitAmount = team.maxWithdrawAmountForPlayer(player.getUUID());
+		if (cooldown > 0L) {
+			long secondsRemaining = (cooldown + 999L) / 1000L;
+			context.getSource().sendFailure(Component.literal("You must wait ")
+				.append(Component.literal(secondsRemaining + " seconds").withStyle(ChatFormatting.GOLD))
+				.append(Component.literal(" before withdrawing again. Max withdrawal per " + team.withdrawalLimitIntervalMinutes() + " minutes is "))
+				.append(formatCurrency(limitAmount))
+				.append(Component.literal(".")));
+			return 0;
+		}
+		if (amount > limitAmount) {
+			context.getSource().sendFailure(Component.literal("You can only withdraw up to ")
+				.append(formatCurrency(limitAmount))
+				.append(Component.literal(" per " + team.withdrawalLimitIntervalMinutes() + " minutes (" + team.withdrawalLimitPercent() + "% of the bank).")));
+			return 0;
+		}
+		if (!teamManager.withdrawFromBank(context.getSource().getServer(), team, amount, player.getUUID())) {
 			context.getSource().sendFailure(Component.literal("Your team bank does not have enough coins."));
 			return 0;
 		}
 
+		notifyLeaderOfBankTransfer(context.getSource().getServer(), team, player, "withdrew", amount);
 		currencyManager.addBalance(context.getSource().getServer(), player.getUUID(), amount);
 		MutableComponent response = Component.literal("Withdrew ")
 			.append(formatCurrency(amount))
@@ -342,6 +556,134 @@ public final class TeamCommands {
 			.append(Component.literal("."));
 		context.getSource().sendSuccess(() -> response, false);
 		return Command.SINGLE_SUCCESS;
+	}
+
+	private void notifyLeaderOfBankTransfer(MinecraftServer server, TeamData team, ServerPlayer player, String action, int amount) {
+		ServerPlayer leader = server.getPlayerList().getPlayer(team.leaderId());
+		if (leader == null || leader.getUUID().equals(player.getUUID())) {
+			return;
+		}
+
+		leader.sendSystemMessage(Component.literal("[Team Bank] ").withStyle(ChatFormatting.GOLD)
+			.append(Component.literal(player.getName().getString()).withStyle(team.color()))
+			.append(Component.literal(" " + action + " "))
+			.append(formatCurrency(amount))
+			.append(Component.literal(". New team bank balance: "))
+			.append(formatCurrency(team.bankBalance()))
+			.append(Component.literal(".")));
+	}
+
+	private int blockWithdrawalsAll(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+		ServerPlayer leader = context.getSource().getPlayerOrException();
+		TeamData team = requireLeaderTeam(context, leader);
+		if (team == null) {
+			return 0;
+		}
+
+		teamManager.setWithdrawalsBlockedForAll(context.getSource().getServer(), team, true);
+		context.getSource().sendSuccess(() -> Component.literal("Withdrawals have been blocked for all non-leaders."), false);
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private int unblockWithdrawalsAll(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+		ServerPlayer leader = context.getSource().getPlayerOrException();
+		TeamData team = requireLeaderTeam(context, leader);
+		if (team == null) {
+			return 0;
+		}
+
+		teamManager.setWithdrawalsBlockedForAll(context.getSource().getServer(), team, false);
+		context.getSource().sendSuccess(() -> Component.literal("Withdrawals have been unblocked for all team members."), false);
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private int blockWithdrawalsPlayer(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+		ServerPlayer leader = context.getSource().getPlayerOrException();
+		TeamData team = requireLeaderTeam(context, leader);
+		if (team == null) {
+			return 0;
+		}
+
+		ServerPlayer target = EntityArgument.getPlayer(context, "player");
+		if (!team.hasMember(target.getUUID())) {
+			context.getSource().sendFailure(Component.literal("That player is not in your team."));
+			return 0;
+		}
+
+		if (team.leaderId().equals(target.getUUID())) {
+			context.getSource().sendFailure(Component.literal("You cannot block the leader."));
+			return 0;
+		}
+
+		teamManager.setBlockedWithdrawalForPlayer(context.getSource().getServer(), team, target.getUUID(), true);
+		context.getSource().sendSuccess(() -> Component.literal("Blocked withdrawals for ").append(Component.literal(target.getName().getString()).withStyle(team.color())).append(Component.literal(".")), false);
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private int unblockWithdrawalsPlayer(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+		ServerPlayer leader = context.getSource().getPlayerOrException();
+		TeamData team = requireLeaderTeam(context, leader);
+		if (team == null) {
+			return 0;
+		}
+
+		ServerPlayer target = EntityArgument.getPlayer(context, "player");
+		if (!team.hasMember(target.getUUID())) {
+			context.getSource().sendFailure(Component.literal("That player is not in your team."));
+			return 0;
+		}
+
+		teamManager.setBlockedWithdrawalForPlayer(context.getSource().getServer(), team, target.getUUID(), false);
+		context.getSource().sendSuccess(() -> Component.literal("Unblocked withdrawals for ").append(Component.literal(target.getName().getString()).withStyle(team.color())).append(Component.literal(".")), false);
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private int setBankLimit(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+		ServerPlayer leader = context.getSource().getPlayerOrException();
+		TeamData team = requireLeaderTeam(context, leader);
+		if (team == null) {
+			return 0;
+		}
+
+		int percentage = IntegerArgumentType.getInteger(context, "percentage");
+		int minutes = IntegerArgumentType.getInteger(context, "minutes");
+		if (!teamManager.setBankWithdrawLimit(context.getSource().getServer(), team, percentage, minutes)) {
+			context.getSource().sendFailure(Component.literal("Invalid withdraw limit. Percentage must be 1-100 and minutes must be at least 1."));
+			return 0;
+		}
+
+		context.getSource().sendSuccess(() -> Component.literal("Set withdraw limit to ")
+			.append(Component.literal(percentage + "% every " + minutes + " minutes").withStyle(ChatFormatting.GOLD))
+			.append(Component.literal(". Players can withdraw up to " + percentage + "% of the team bank every " + minutes + " minutes.").withStyle(ChatFormatting.GRAY)), false);
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private CompletableFuture<Suggestions> suggestLimitPercent(CommandContext<CommandSourceStack> context, SuggestionsBuilder builder) throws CommandSyntaxException {
+		TeamData team = teamManager.getTeamForPlayer(context.getSource().getServer(), context.getSource().getPlayerOrException().getUUID());
+		int current = team != null ? team.withdrawalLimitPercent() : 33;
+		builder.suggest(String.valueOf(current), Component.literal("% of total team bank").withStyle(ChatFormatting.GRAY));
+		builder.suggest("25", Component.literal("% of total team bank").withStyle(ChatFormatting.GRAY));
+		builder.suggest("50", Component.literal("% of total team bank").withStyle(ChatFormatting.GRAY));
+		builder.suggest("75", Component.literal("% of total team bank").withStyle(ChatFormatting.GRAY));
+		builder.suggest("100", Component.literal("% of total team bank").withStyle(ChatFormatting.GRAY));
+		return builder.buildFuture();
+	}
+
+	private CompletableFuture<Suggestions> suggestLimitMinutes(CommandContext<CommandSourceStack> context, SuggestionsBuilder builder) throws CommandSyntaxException {
+		TeamData team = teamManager.getTeamForPlayer(context.getSource().getServer(), context.getSource().getPlayerOrException().getUUID());
+		int current = team != null ? team.withdrawalLimitIntervalMinutes() : 5;
+		builder.suggest(String.valueOf(current), Component.literal("withdrawal cooldown").withStyle(ChatFormatting.GRAY));
+		builder.suggest("1", Component.literal("withdrawal cooldown").withStyle(ChatFormatting.GRAY));
+		builder.suggest("5", Component.literal("withdrawal cooldown").withStyle(ChatFormatting.GRAY));
+		builder.suggest("10", Component.literal("withdrawal cooldown").withStyle(ChatFormatting.GRAY));
+		builder.suggest("15", Component.literal("withdrawal cooldown").withStyle(ChatFormatting.GRAY));
+		builder.suggest("30", Component.literal("withdrawal cooldown").withStyle(ChatFormatting.GRAY));
+		return builder.buildFuture();
+	}
+
+	private MutableComponent formatContribution(int amount) {
+		String sign = amount >= 0 ? "+" : "";
+		return Component.literal(sign + amount).withStyle(amount >= 0 ? ChatFormatting.GREEN : ChatFormatting.RED);
 	}
 
 	private TeamData requirePlayerTeam(CommandContext<CommandSourceStack> context, ServerPlayer player) {
@@ -364,25 +706,46 @@ public final class TeamCommands {
 		String leaderName = leader != null ? leader.getName().getString() : team.leaderId().toString();
 
 		MutableComponent members = Component.literal("");
+		boolean firstMember = true;
 		for (UUID memberId : team.memberIds()) {
 			ServerPlayer member = server.getPlayerList().getPlayer(memberId);
 			String name = member != null ? member.getName().getString() : memberId.toString();
-			if (!members.getString().isEmpty()) {
-				members.append(Component.literal(", "));
+			if (!firstMember) {
+				members.append(Component.literal("\n"));
 			}
-			members.append(Component.literal(name));
+			firstMember = false;
+			members.append(Component.literal(name + " "))
+				.append(formatContribution(team.getContribution(memberId)));
 		}
 
 		MutableComponent message = Component.literal("Team: ")
 			.append(teamManager.describeTeam(team))
 			.append(Component.literal("\nLevel: " + team.level()))
 			.append(Component.literal("\nLeader: " + leaderName))
-			.append(Component.literal("\nMembers: " + team.memberIds().size() + "/" + team.maxMembers() + " "))
+			.append(Component.literal("\nMembers: " + team.memberIds().size() + "/" + team.maxMembers()))
+			.append(Component.literal("\n"))
 			.append(members)
 			.append(Component.literal("\nBank: "))
 			.append(formatCurrency(team.bankBalance()))
 			.append(Component.literal("\nNext upgrade cost: "))
-			.append(formatCurrency(teamManager.getLevelUpCost(team)));
+			.append(formatCurrency(teamManager.getLevelUpCost(team)))
+			.append(Component.literal("\nWithdraw limit: " + team.withdrawalLimitPercent() + "% every " + team.withdrawalLimitIntervalMinutes() + " minutes"));
+
+		if (team.areWithdrawalsBlockedForAll()) {
+			message.append(Component.literal("\nWithdrawals: blocked for everyone except the leader"));
+		} else if (!team.blockedWithdrawalMembers().isEmpty()) {
+			message.append(Component.literal("\nWithdrawals blocked for: "));
+			boolean first = true;
+			for (UUID blockedMemberId : team.blockedWithdrawalMembers()) {
+				ServerPlayer blockedMember = context.getSource().getServer().getPlayerList().getPlayer(blockedMemberId);
+				String blockedName = blockedMember != null ? blockedMember.getName().getString() : blockedMemberId.toString();
+				if (!first) {
+					message.append(Component.literal(", "));
+				}
+				first = false;
+				message.append(Component.literal(blockedName).withStyle(team.color()));
+			}
+		}
 
 		context.getSource().sendSuccess(() -> message, false);
 		return Command.SINGLE_SUCCESS;
@@ -459,6 +822,28 @@ public final class TeamCommands {
 		ServerPlayer leader = context.getSource().getServer().getPlayerList().getPlayer(team.leaderId());
 		if (leader != null) {
 			leader.sendSystemMessage(Component.literal(player.getName().getString() + " left your team ").append(teamManager.describeTeam(team)).append(Component.literal(".")));
+		}
+
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private int teamChat(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+		ServerPlayer sender = context.getSource().getPlayerOrException();
+		TeamData team = requirePlayerTeam(context, sender);
+		if (team == null) {
+			return 0;
+		}
+
+		String message = StringArgumentType.getString(context, "message");
+		MutableComponent chatMessage = Component.literal("[Team] ").withStyle(team.color(), ChatFormatting.BOLD)
+			.append(Component.literal(sender.getName().getString()).withStyle(team.color()))
+			.append(Component.literal(": " + message).withStyle(ChatFormatting.WHITE));
+
+		for (UUID memberId : team.memberIds()) {
+			ServerPlayer member = context.getSource().getServer().getPlayerList().getPlayer(memberId);
+			if (member != null) {
+				member.sendSystemMessage(chatMessage);
+			}
 		}
 
 		return Command.SINGLE_SUCCESS;
